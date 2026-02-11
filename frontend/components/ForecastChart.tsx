@@ -53,7 +53,7 @@ export default function ForecastChart({
   };
 
   // Prepare chart data
-  const chartData = [];
+  const chartData : any[] = [];
   
   // Historical data
   salesData.forEach((point) => {
