@@ -1,0 +1,31 @@
+date,sales,ProductCategory,Region,CustomerSegment,MarketingSpend,IsPromotion,Quantity,UnitPrice
+2024-01-01,1200,Electronics,North America,Enterprise,5000,0,150,8.00
+2024-01-02,1350,Electronics,North America,SMB,3000,1,180,7.50
+2024-01-03,1100,Software,Europe,Enterprise,4000,0,120,9.00
+2024-01-04,1500,Software,Asia,SMB,2500,1,200,7.50
+2024-01-05,1400,Electronics,North America,Enterprise,6000,0,175,8.00
+2024-01-06,1600,Software,Europe,Enterprise,5500,1,220,9.00
+2024-01-07,1300,Electronics,Asia,SMB,3500,0,160,7.50
+2024-01-08,1450,Software,North America,Enterprise,4500,1,190,8.50
+2024-01-09,1550,Electronics,Europe,SMB,3000,0,195,7.75
+2024-01-10,1700,Software,Asia,Enterprise,6500,1,240,9.00
+2024-01-11,1400,Electronics,North America,SMB,2000,1,170,7.50
+2024-01-12,1600,Software,Europe,SMB,3500,0,200,8.50
+2024-01-13,1800,Electronics,Asia,Enterprise,7000,1,260,8.00
+2024-01-14,1500,Software,North America,SMB,2500,0,180,8.00
+2024-01-15,1900,Electronics,Europe,Enterprise,6000,1,270,8.25
+2024-01-16,1650,Software,Asia,SMB,3000,1,210,8.50
+2024-01-17,1700,Electronics,North America,Enterprise,5500,0,200,7.75
+2024-01-18,2000,Software,Europe,Enterprise,7000,1,280,9.00
+2024-01-19,1800,Electronics,Asia,SMB,3500,0,220,8.00
+2024-01-20,2100,Software,North America,Enterprise,6500,1,300,8.75
+2024-01-21,1900,Electronics,Europe,SMB,2500,1,240,8.00
+2024-01-22,2200,Software,Asia,Enterprise,7500,0,320,9.25
+2024-01-23,2000,Electronics,North America,SMB,3000,1,250,7.75
+2024-01-24,2300,Software,Europe,SMB,4000,0,330,8.75
+2024-01-25,2150,Electronics,Asia,Enterprise,6500,1,280,8.25
+2024-01-26,2400,Software,North America,Enterprise,7000,0,350,9.00
+2024-01-27,2250,Electronics,Europe,Enterprise,5500,1,290,8.50
+2024-01-28,2500,Software,Asia,SMB,3500,0,360,8.75
+2024-01-29,2350,Electronics,North America,Enterprise,6000,1,310,8.00
+2024-01-30,2600,Software,Europe,Enterprise,7500,1,380,9.25

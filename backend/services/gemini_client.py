@@ -1,9 +1,12 @@
 """
 Gemini API client for generating AI explanations.
 Handles API calls, error handling, and graceful fallback.
+Enhanced to include CSV data and sales-specific analysis.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import os
+import io
+import pandas as pd
 
 try:
     import google.generativeai as genai
@@ -13,7 +16,7 @@ except ImportError:
 
 
 class GeminiClient:
-    """Client for Gemini API with error handling."""
+    """Client for Gemini API with error handling and CSV support."""
     
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -35,12 +38,13 @@ class GeminiClient:
                 print(f"Warning: Failed to initialize Gemini: {e}")
                 self.is_available = False
     
-    def generate_explanation(self, prompt: str) -> Optional[str]:
+    def generate_explanation(self, prompt: str, csv_data: Optional[str] = None) -> Optional[str]:
         """
-        Generate explanation using Gemini API.
+        Generate explanation using Gemini API with optional CSV context.
         
         Args:
             prompt: Structured prompt for Gemini
+            csv_data: Optional CSV data as string for richer analysis
             
         Returns:
             Explanation string, or None if Gemini unavailable
@@ -49,20 +53,70 @@ class GeminiClient:
             return None
         
         try:
+            # Build request with CSV context if provided
+            content_parts = []
+            
+            # Add CSV data context if available
+            if csv_data:
+                csv_summary = self._summarize_csv(csv_data)
+                content_parts.append(f"CSV Data Summary:\n{csv_summary}\n\n")
+            
+            # Add the main prompt
+            content_parts.append(prompt)
+            full_content = "".join(content_parts)
+            # Ask Gemini to respond in JSON
+            full_content += "\n\nRespond ONLY in JSON format with key-value pairs for: business_context, model_insights, trend_seasonality, risks_volatility, recommendations."
             response = self.client.generate_content(
-                prompt,
+                full_content,
                 stream=False,
                 safety_settings=self._get_safety_settings()
             )
-            # Ensure the response is complete
             response.resolve()
             if response and hasattr(response, 'text') and response.text:
-                return response.text.strip()
+                import json
+                try:
+                    return json.loads(response.text.strip())
+                except Exception:
+                    return {"analysis": response.text.strip()}
             return None
         except Exception as e:
             # Log error but don't raise - let caller handle fallback
             print(f"Warning: Gemini API error: {e}")
             return None
+    
+    def _summarize_csv(self, csv_data: str) -> str:
+        """
+        Create a summary of CSV data for context.
+        
+        Args:
+            csv_data: CSV data as string
+            
+        Returns:
+            Formatted summary of the data
+        """
+        try:
+            df = pd.read_csv(io.StringIO(csv_data))
+            
+            summary = f"Records: {len(df)}\n"
+            summary += f"Columns: {', '.join(df.columns)}\n"
+            summary += f"Date Range: {df.get('Date', df.iloc[:, 0]).iloc[0]} to {df.get('Date', df.iloc[:, 0]).iloc[-1]}\n"
+            
+            # Add numeric column stats
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            for col in numeric_cols:
+                summary += f"{col} - Min: {df[col].min():.2f}, Max: {df[col].max():.2f}, Avg: {df[col].mean():.2f}\n"
+            
+            # Add categorical information
+            categorical_cols = df.select_dtypes(include=['object']).columns
+            for col in categorical_cols:
+                if col != 'Date':
+                    unique_vals = df[col].unique()
+                    if len(unique_vals) <= 10:
+                        summary += f"{col}: {', '.join(map(str, unique_vals))}\n"
+            
+            return summary
+        except Exception as e:
+            return f"Could not parse CSV: {str(e)}"
     
     def _get_safety_settings(self) -> list:
         """Get safe default safety settings for content generation."""
@@ -89,12 +143,13 @@ class GeminiClient:
         except ImportError:
             return []
     
-    def build_prompt(self, metadata: Dict[str, Any]) -> str:
+    def build_prompt(self, metadata: Dict[str, Any], include_csv_insights: bool = True) -> str:
         """
         Build structured prompt for Gemini from forecast metadata.
         
         Args:
             metadata: Forecast metadata (structured, no raw numbers)
+            include_csv_insights: Whether to include insights from CSV data analysis
             
         Returns:
             Formatted prompt string
@@ -109,28 +164,45 @@ class GeminiClient:
         volatility = metadata.get("volatility", "unknown")
         mape = metadata.get("mape", "N/A")
         
-        prompt = f"""You are a sales forecasting analyst explaining a forecast to a business user.
+        # Sales-specific metadata
+        product_category = metadata.get("product_category", "Not available")
+        regions = metadata.get("regions", "Not available")
+        customer_segments = metadata.get("customer_segments", "Not available")
+        avg_marketing_spend = metadata.get("avg_marketing_spend", "Not available")
+        promotion_impact = metadata.get("promotion_impact", "Not available")
+        
+        prompt = f"""You are an expert sales forecasting analyst explaining a forecast to business stakeholders.
 
-Forecast Metadata:
+FORECAST ANALYSIS:
 - Model Used: {model_used}
 - Model Selection Reason: {model_reason}
 - Confidence Level: {confidence}
-- Data Points: {data_points}
+- Data Points Analyzed: {data_points}
 - Forecast Horizon: {forecast_horizon} days
 - Trend: {trend}
 - Seasonality: {seasonality}
 - Volatility: {volatility}
-- MAPE (Mean Absolute Percentage Error): {mape}%
+- Forecast Accuracy (MAPE): {mape}%
 
-IMPORTANT RULES:
-1. NEVER generate numerical forecast values - only explain patterns and trends
-2. NEVER override or contradict the model's output
-3. Focus on explaining WHY the model was chosen and what it means
-4. Discuss confidence level and what factors affect it
-5. Mention risks and assumptions
-6. Use clear, business-friendly language
-7. Keep response concise (2-3 sentences for key points)
+SALES BUSINESS CONTEXT:
+- Product Categories: {product_category}
+- Geographic Regions: {regions}
+- Customer Segments: {customer_segments}
+- Average Marketing Spend: {avg_marketing_spend}
+- Promotion Impact: {promotion_impact}
 
-Please provide a professional explanation of this forecast following all the rules above. Make it a comprehensive analysis in plain text format, and avoid any Markdown formatting."""
+ANALYSIS GUIDELINES:
+1. Provide business-focused insights on sales performance
+2. Explain forecast implications for revenue, inventory, and resource planning
+3. Discuss seasonal patterns and regional variations
+4. Address risks, opportunities, and actionable recommendations
+5. DO NOT generate specific forecast numbers - only explain trends and patterns
+6. DO NOT contradict the model's output
+7. Use clear, non-technical language suitable for executives
+8. Highlight factors that could impact forecast accuracy (market conditions, seasonality, promotions)
+9. Suggest key metrics to monitor
+10. Provide plain text format without Markdown
+
+Generate a comprehensive professional analysis that helps stakeholders understand the forecast and make informed business decisions."""
         
         return prompt

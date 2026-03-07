@@ -45,10 +45,25 @@ export default function CSVUpload({ onDataUpload }: CSVUploadProps) {
               throw new Error(`Invalid date format: ${date}`);
             }
 
-            data.push({
+            const dataPoint: ForecastDataPoint = {
               date: dateObj.toISOString().split('T')[0], // Format as YYYY-MM-DD
               sales: salesValue,
+            };
+
+            // Include optional sales context columns if present
+            const contextFields = [
+              'ProductCategory', 'Region', 'CustomerSegment',
+              'MarketingSpend', 'IsPromotion', 'Quantity', 'UnitPrice'
+            ];
+            
+            contextFields.forEach(field => {
+              const value = row[field];
+              if (value !== undefined && value !== null && value !== '') {
+                dataPoint[field] = isNaN(parseFloat(value)) ? value : parseFloat(value);
+              }
             });
+
+            data.push(dataPoint);
           }
 
           if (data.length < 2) {
@@ -112,6 +127,9 @@ export default function CSVUpload({ onDataUpload }: CSVUploadProps) {
             <p style={{ color: '#64748b', fontSize: '0.85rem', marginTop: '0.5rem' }}>
               Example: 2024-01-01, 1200
             </p>
+            <p style={{ color: '#64748b', fontSize: '0.8rem', marginTop: '0.75rem', fontStyle: 'italic' }}>
+              Optional: ProductCategory, Region, CustomerSegment, MarketingSpend, IsPromotion, Quantity, UnitPrice
+            </p>
           </div>
         </label>
       </div>
@@ -122,7 +140,7 @@ export default function CSVUpload({ onDataUpload }: CSVUploadProps) {
         </div>
       )}
       <p style={{ marginTop: '1rem', color: '#94a3b8', fontSize: '0.9rem', lineHeight: '1.6' }}>
-        💡 <span style={{ fontWeight: '500', color: '#cbd5e1' }}>Tip:</span> Your CSV file should contain two columns with headers. You can use "date", "Date", "sales", "Sales", "value", or "Value" as column names.
+        💡 <span style={{ fontWeight: '500', color: '#cbd5e1' }}>Tip:</span> Your CSV file should contain date and sales columns. Add optional business context columns (ProductCategory, Region, Quantity, etc.) for richer insights!
       </p>
     </div>
   );

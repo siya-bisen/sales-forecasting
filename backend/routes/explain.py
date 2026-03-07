@@ -5,7 +5,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Dict, Any
 import os
-import google.generativeai as genai
+
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
 
 
 router = APIRouter()
@@ -17,9 +22,13 @@ genai_client = None
 def initialize_gemini(api_key: str):
     """Initialize Gemini client with API key."""
     global genai_client
-    if api_key:
-        genai.configure(api_key=api_key)
-        genai_client = genai.GenerativeModel('gemini-1.5-flash')
+    if api_key and GENAI_AVAILABLE:
+        try:
+            genai.configure(api_key=api_key)
+            genai_client = genai.GenerativeModel('gemini-3-flash-preview')
+        except Exception as e:
+            print(f"Warning: Failed to initialize Gemini in explain route: {e}")
+            genai_client = None
 
 
 class ExplainRequest(BaseModel):
@@ -65,14 +74,19 @@ async def explain_endpoint(request: ExplainRequest):
         prompt = build_explanation_prompt(forecast_metadata, request.user_question)
         
         # Generate explanation
-        response = genai_client.generate_content(prompt, stream=False)
-        response.resolve()
-        explanation = response.text if hasattr(response, 'text') else str(response)
-        
-        return ExplainResponse(explanation=explanation)
+        if genai_client:
+            response = genai_client.generate_content(prompt, stream=False)
+            response.resolve()
+            explanation = response.text if hasattr(response, 'text') else str(response)
+            return ExplainResponse(explanation=explanation)
+        else:
+            # Fallback if client not initialized
+            explanation = generate_fallback_explanation(request.forecast_result)
+            return ExplainResponse(explanation=explanation)
     
     except Exception as e:
         # Fallback to rule-based explanation
+        print(f"Gemini API error: {e}")
         explanation = generate_fallback_explanation(request.forecast_result)
         return ExplainResponse(explanation=explanation)
 

@@ -1,17 +1,29 @@
 /**
  * API client for backend communication.
+ * Enhanced with sales-specific context and CSV data support.
  */
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface ForecastDataPoint {
   date: string;
   sales: number;
+  [key: string]: any; // Support additional sales features
 }
 
 export interface ForecastRequest {
   data: ForecastDataPoint[];
   horizon: 7 | 30 | 90;
   model: 'auto' | 'moving_average' | 'prophet' | 'sarima';
+}
+
+export interface SalesContext {
+  product_category: string;
+  regions: string;
+  customer_segments: string;
+  avg_marketing_spend: string;
+  promotion_impact: string;
+  avg_quantity: string;
+  avg_unit_price: string;
 }
 
 export interface ForecastResponse {
@@ -36,6 +48,7 @@ export interface ForecastResponse {
   explanation: string;
   explanation_source: 'gemini' | 'rule-based';
   notes: string[];
+  sales_context: SalesContext;
 }
 
 export interface ExplainRequest {

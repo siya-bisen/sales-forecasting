@@ -1,6 +1,7 @@
 """
 Forecast API endpoint.
 Integrates data validation, model eligibility, and explanation generation.
+Enhanced with CSV data and sales context integration.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -9,6 +10,8 @@ from services import forecasting
 from services.forecasting import generate_forecast
 from services.data_validation import validate_minimum_data_points, get_data_quality_notes, DataValidationError
 from services.model_eligibility import validate_model_selection, ModelIneligibilityError
+import io
+import csv
 
 
 router = APIRouter()
@@ -16,7 +19,7 @@ router = APIRouter()
 
 class ForecastRequest(BaseModel):
     """Request model for forecast endpoint."""
-    data: List[Dict[str, Any]] = Field(..., description="Time series data with 'date' and 'sales' keys")
+    data: List[Dict[str, Any]] = Field(..., description="Time series data with 'date' and 'sales' keys, may include additional sales features")
     horizon: Literal[7, 30, 90] = Field(..., description="Forecast horizon in days")
     model: Literal["auto", "moving_average", "prophet", "sarima"] = Field(
         default="auto",
@@ -33,9 +36,10 @@ class ForecastResponse(BaseModel):
     metrics: Dict[str, float]
     forecast: List[Dict[str, Any]]
     summary: Dict[str, str]
-    explanation: str
+    explanation: dict
     explanation_source: str
     notes: List[str]
+    sales_context: Dict[str, Any]
 
 
 @router.post("/forecast", response_model=ForecastResponse)
@@ -48,8 +52,10 @@ async def forecast_endpoint(request: ForecastRequest):
     - Model selection reasoning
     - AI explanation (Gemini) or rule-based fallback
     - Data quality notes
+    - Sales business context
     
     Enforces minimum data requirements (2+ points) and model eligibility rules.
+    Enhanced to analyze sales-specific features if provided.
     """
     try:
         # Validate minimum data requirements
@@ -66,11 +72,36 @@ async def forecast_endpoint(request: ForecastRequest):
             model_choice=request.model
         )
         
-        # Generate explanation
-        explanation, explanation_source = _generate_explanation(result)
+        # Convert data to CSV format for Gemini analysis
+        csv_data = _convert_to_csv(request.data)
         
-        # Get data quality notes
-        notes = get_data_quality_notes()
+        # Generate explanation with CSV context and sales metadata
+        explanation, explanation_source = _generate_explanation(
+            result, 
+            csv_data=csv_data
+        )
+        # Ensure explanation is a dict (for JSON Gemini response)
+        if isinstance(explanation, str):
+            explanation = {"analysis": explanation}
+        
+        # Get data quality notes with actual data analysis
+        # Extract values from original request data for analysis
+        data_values = [float(item.get("sales", 0)) for item in request.data]
+        notes = get_data_quality_notes(
+            metadata=result["metadata"],
+            values=data_values
+        )
+        
+        # Extract sales context from metadata
+        sales_context = {
+            "product_category": result["metadata"].get("product_category", "All"),
+            "regions": result["metadata"].get("regions", "All"),
+            "customer_segments": result["metadata"].get("customer_segments", "All"),
+            "avg_marketing_spend": result["metadata"].get("avg_marketing_spend", "Not specified"),
+            "promotion_impact": result["metadata"].get("promotion_impact", "Not analyzed"),
+            "avg_quantity": result["metadata"].get("avg_quantity", "N/A"),
+            "avg_unit_price": result["metadata"].get("avg_unit_price", "N/A"),
+        }
         
         # Build response
         response_data = {
@@ -83,7 +114,8 @@ async def forecast_endpoint(request: ForecastRequest):
             "summary": result["summary"],
             "explanation": explanation,
             "explanation_source": explanation_source,
-            "notes": notes
+            "notes": notes,
+            "sales_context": sales_context
         }
         
         return ForecastResponse(**response_data)
@@ -96,12 +128,35 @@ async def forecast_endpoint(request: ForecastRequest):
         raise HTTPException(status_code=500, detail=f"Forecast generation failed: {str(e)}")
 
 
-def _generate_explanation(forecast_result: Dict[str, Any]) -> Tuple[str, str]:
+def _convert_to_csv(data: List[Dict[str, Any]]) -> str:
+    """
+    Convert data to CSV string format.
+    
+    Args:
+        data: List of dictionaries
+        
+    Returns:
+        CSV formatted string
+    """
+    if not data:
+        return ""
+    
+    output = io.StringIO()
+    fieldnames = list(data[0].keys())
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(data)
+    return output.getvalue()
+
+
+def _generate_explanation(forecast_result: Dict[str, Any], csv_data: Optional[str] = None) -> Tuple[str, str]:
     """
     Generate explanation using Gemini or rule-based fallback.
+    Enhanced with CSV data context.
     
     Args:
         forecast_result: Forecast result dictionary
+        csv_data: Optional CSV data as string
         
     Returns:
         Tuple of (explanation_text, source) where source is "gemini" or "rule-based"
@@ -120,8 +175,14 @@ def _generate_explanation(forecast_result: Dict[str, Any]) -> Tuple[str, str]:
         "trend": forecast_result["summary"]["trend"],
         "seasonality": forecast_result["summary"]["seasonality"],
         "volatility": forecast_result["summary"]["volatility"],
-        "mape": forecast_result["metrics"].get("mape", 10.0)
+        "mape": forecast_result["metrics"].get("mape", 10.0),
+        # Add sales context
+        "product_category": forecast_result["metadata"].get("product_category", "All"),
+        "regions": forecast_result["metadata"].get("regions", "All"),
+        "customer_segments": forecast_result["metadata"].get("customer_segments", "All"),
+        "avg_marketing_spend": forecast_result["metadata"].get("avg_marketing_spend", "Not specified"),
+        "promotion_impact": forecast_result["metadata"].get("promotion_impact", "Not analyzed"),
     }
     
-    explanation, source = explanation_engine.generate_explanation(metadata)
+    explanation, source = explanation_engine.generate_explanation(metadata, csv_data=csv_data)
     return explanation, source

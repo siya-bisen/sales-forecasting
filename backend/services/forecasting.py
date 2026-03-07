@@ -59,17 +59,21 @@ def generate_forecast(
 ) -> Dict[str, Any]:
     """
     Generate sales forecast using specified or auto-selected model.
+    Enhanced with sales-specific metadata extraction.
     
     Args:
-        data: List of dictionaries with 'date' and 'sales' keys
+        data: List of dictionaries with 'date' and 'sales' keys (may include additional sales features)
         horizon: Number of days to forecast (7, 30, or 90)
         model_choice: Model to use ("auto", "moving_average", "prophet", "sarima")
         
     Returns:
-        Dictionary with forecast results
+        Dictionary with forecast results and sales context
     """
     # Validate and normalize data
     dates, values, metadata = validate_and_normalize_data(data)
+    
+    # Extract sales-specific metadata from input data
+    sales_context = _extract_sales_context(data)
     
     # Select model
     if model_choice == "auto":
@@ -127,7 +131,8 @@ def generate_forecast(
     if not seasonality and metadata.get("has_seasonality"):
         seasonality = "weekly"  # Default if detected but not in result
     
-    return {
+    # Build comprehensive result with sales context
+    result = {
         "model_used": model_name,
         "model_reason": model_reason.get("reason", "Model selected"),
         "confidence_level": confidence,
@@ -143,6 +148,89 @@ def generate_forecast(
         "metadata": {
             "data_points": len(values),
             "forecast_horizon": horizon,
-            "model_metadata": model_metadata
+            "model_metadata": model_metadata,
+            # Sales-specific context
+            "product_category": sales_context.get("product_category", "All"),
+            "regions": sales_context.get("regions", "All"),
+            "customer_segments": sales_context.get("customer_segments", "All"),
+            "avg_marketing_spend": sales_context.get("avg_marketing_spend", "Not specified"),
+            "promotion_impact": sales_context.get("promotion_impact", "Not analyzed"),
+            "avg_quantity": sales_context.get("avg_quantity", "N/A"),
+            "avg_unit_price": sales_context.get("avg_unit_price", "N/A"),
         }
     }
+    
+    return result
+
+
+def _extract_sales_context(data: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Extract sales-specific context from the data.
+    Analyzes additional columns like ProductCategory, Region, Quantity, etc.
+    
+    Args:
+        data: List of data dictionaries
+        
+    Returns:
+        Dictionary with sales context
+    """
+    if not data:
+        return {}
+    
+    context = {}
+    
+    # Extract unique categories
+    if "ProductCategory" in data[0]:
+        categories = set(row.get("ProductCategory") for row in data if "ProductCategory" in row)
+        context["product_category"] = ", ".join(sorted(filter(None, categories))) or "All"
+    
+    # Extract regions
+    if "Region" in data[0]:
+        regions = set(row.get("Region") for row in data if "Region" in row)
+        context["regions"] = ", ".join(sorted(filter(None, regions))) or "All"
+    
+    # Extract customer segments
+    if "CustomerSegment" in data[0]:
+        segments = set(row.get("CustomerSegment") for row in data if "CustomerSegment" in row)
+        context["customer_segments"] = ", ".join(sorted(filter(None, segments))) or "All"
+    
+    # Calculate average marketing spend
+    if "MarketingSpend" in data[0]:
+        marketing_spends = [float(row.get("MarketingSpend", 0)) for row in data if "MarketingSpend" in row]
+        if marketing_spends:
+            avg_spend = sum(marketing_spends) / len(marketing_spends)
+            context["avg_marketing_spend"] = f"${avg_spend:.2f}"
+    
+    # Analyze promotion impact
+    if "IsPromotion" in data[0]:
+        promo_sales = []
+        non_promo_sales = []
+        for row in data:
+            if "IsPromotion" in row and "Sales" in row:
+                if row.get("IsPromotion"):
+                    promo_sales.append(float(row.get("Sales", 0)))
+                else:
+                    non_promo_sales.append(float(row.get("Sales", 0)))
+        
+        if promo_sales and non_promo_sales:
+            avg_promo = sum(promo_sales) / len(promo_sales)
+            avg_non_promo = sum(non_promo_sales) / len(non_promo_sales)
+            impact_pct = ((avg_promo - avg_non_promo) / avg_non_promo * 100) if avg_non_promo > 0 else 0
+            if impact_pct > 0:
+                context["promotion_impact"] = f"Promotions increase sales by ~{impact_pct:.1f}%"
+            else:
+                context["promotion_impact"] = f"Promotions decrease sales by ~{abs(impact_pct):.1f}%"
+    
+    # Calculate average quantity
+    if "Quantity" in data[0]:
+        quantities = [float(row.get("Quantity", 0)) for row in data if "Quantity" in row]
+        if quantities:
+            context["avg_quantity"] = f"{sum(quantities) / len(quantities):.1f} units"
+    
+    # Calculate average unit price
+    if "UnitPrice" in data[0]:
+        prices = [float(row.get("UnitPrice", 0)) for row in data if "UnitPrice" in row]
+        if prices:
+            context["avg_unit_price"] = f"${sum(prices) / len(prices):.2f}"
+    
+    return context
