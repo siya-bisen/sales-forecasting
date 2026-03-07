@@ -40,7 +40,7 @@ export default function ForecastChart({
   loading: externalLoading,
 }: ForecastChartProps) {
   const [horizon, setHorizon] = useState<7 | 30 | 90>(30);
-  const [model, setModel] = useState<'auto' | 'moving_average' | 'prophet' | 'sarima'>('auto');
+  const [model, setModel] = useState<'auto' | 'moving_average' | 'weighted_moving_average' | 'holts_linear_trend' | 'polynomial_regression' | 'exponential_smoothing' | 'seasonal_naive' | 'theta' | 'arima' | 'bayesian_structural' | 'prophet' | 'vector_ar' | 'xgboost' | 'random_forest' | 'gradient_boosting' | 'lstm' | 'sarima' | 'neural_prophet'>('auto');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -119,10 +119,34 @@ export default function ForecastChart({
             onFocus={(e) => e.currentTarget.style.borderColor = '#06b6d4'}
             onBlur={(e) => e.currentTarget.style.borderColor = '#475569'}
           >
-            <option value="auto">Auto (Recommended)</option>
-            <option value="moving_average">Moving Average</option>
-            <option value="prophet">Prophet</option>
-            <option value="sarima">SARIMA</option>
+            <optgroup label="Recommended">
+              <option value="auto">⚡ Auto (Recommended)</option>
+            </optgroup>
+            <optgroup label="Simple Models">
+              <option value="moving_average">Moving Average (MA)</option>
+              <option value="weighted_moving_average">Weighted MA</option>
+              <option value="seasonal_naive">Seasonal Naive</option>
+            </optgroup>
+            <optgroup label="Statistical">
+              <option value="holts_linear_trend">Holt's Linear Trend</option>
+              <option value="polynomial_regression">Polynomial Regression</option>
+              <option value="exponential_smoothing">Exponential Smoothing</option>
+              <option value="theta">Theta Method</option>
+              <option value="arima">ARIMA</option>
+              <option value="bayesian_structural">Bayesian Structural</option>
+              <option value="prophet">Prophet</option>
+              <option value="sarima">SARIMA</option>
+            </optgroup>
+            <optgroup label="Machine Learning">
+              <option value="vector_ar">Vector AR</option>
+              <option value="xgboost">XGBoost</option>
+              <option value="random_forest">Random Forest</option>
+              <option value="gradient_boosting">Gradient Boosting</option>
+            </optgroup>
+            <optgroup label="Deep Learning">
+              <option value="lstm">LSTM Neural Network</option>
+              <option value="neural_prophet">NeuralProphet</option>
+            </optgroup>
           </select>
         </div>
 
@@ -149,29 +173,91 @@ export default function ForecastChart({
 
       {/* Forecast Info Cards */}
       {forecastResult && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-          {[
-            { label: 'Data Points', value: forecastResult.data_points, icon: '📊' },
-            { label: 'Model Used', value: forecastResult.model_used, icon: '🎯' },
-            { label: 'Confidence', value: `${forecastResult.confidence_level}%`, icon: '📈' },
-            { label: 'MAPE', value: `${forecastResult.metrics.mape}%`, icon: '📉' },
-            { label: 'Trend', value: forecastResult.summary.trend, icon: '⬆️' },
-          ].map((item, idx) => (
-            <div
-              key={idx}
-              style={{ padding: '1.25rem', borderRadius: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid #475569', transition: 'all 0.3s', cursor: 'default' }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#06b6d4'; e.currentTarget.style.transform = 'translateY(-4px)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#475569'; e.currentTarget.style.transform = 'translateY(0)'; }}
-            >
-              <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{item.icon}</div>
-              <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '500', marginBottom: '0.5rem' }}>
-                {item.label}
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+            {[
+              { label: 'Data Points', value: forecastResult.data_points, icon: '📊' },
+              { label: 'Model Used', value: forecastResult.model_used, icon: '🎯' },
+              { label: 'Models Tested', value: forecastResult.tested_models || '1', icon: '🔄' },
+              { label: 'Confidence', value: `${forecastResult.confidence_level}%`, icon: '📈' },
+              { label: 'MAPE', value: `${forecastResult.metrics.mape}%`, icon: '📉' },
+              { label: 'Trend', value: forecastResult.summary.trend, icon: '⬆️' },
+            ].map((item, idx) => (
+              <div
+                key={idx}
+                style={{ padding: '1.25rem', borderRadius: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid #475569', transition: 'all 0.3s', cursor: 'default' }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#06b6d4'; e.currentTarget.style.transform = 'translateY(-4px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#475569'; e.currentTarget.style.transform = 'translateY(0)'; }}
+              >
+                <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{item.icon}</div>
+                <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '500', marginBottom: '0.5rem' }}>
+                  {item.label}
+                </div>
+                <div style={{ color: '#f1f5f9', fontSize: '1rem', fontWeight: '600' }}>
+                  {item.value}
+                </div>
               </div>
-              <div style={{ color: '#f1f5f9', fontSize: '1rem', fontWeight: '600' }}>
-                {item.value}
+            ))}
+          </div>
+
+          {/* Model Selection Reasoning */}
+          {forecastResult.model_reason && (
+            <div style={{ padding: '1.5rem', borderRadius: '1rem', backgroundColor: 'rgba(139, 92, 246, 0.08)', border: '1px solid #8b5cf6', marginBottom: '2rem' }}>
+              <h4 style={{ color: '#a78bfa', fontWeight: '600', marginBottom: '0.75rem', fontSize: '1rem' }}>🤖 Why This Model?</h4>
+              <p style={{ color: '#cbd5e1', fontSize: '0.95rem', lineHeight: '1.6', margin: 0 }}>
+                {forecastResult.model_reason}
+              </p>
+            </div>
+          )}
+
+          {/* Model Performance Comparison */}
+          {forecastResult.model_performance && Object.keys(forecastResult.model_performance).length > 1 && (
+            <div style={{ padding: '1.5rem', borderRadius: '1rem', backgroundColor: 'rgba(34, 197, 94, 0.08)', border: '1px solid #22c55e', marginBottom: '2rem' }}>
+              <h4 style={{ color: '#22c55e', fontWeight: '600', marginBottom: '1rem', fontSize: '1rem' }}>📊 Model Comparison (MAPE %)</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem' }}>
+                {Object.entries(forecastResult.model_performance)
+                  .sort((a, b) => (typeof a[1] === 'number' && typeof b[1] === 'number' ? a[1] - b[1] : 0))
+                  .map(([modelName, mape]) => {
+                    const isSelected = modelName === forecastResult.model_used;
+                    const maapeNum = typeof mape === 'number' ? mape : parseFloat(String(mape));
+                    const isBest = maapeNum === Math.min(...Object.values(forecastResult.model_performance || {})
+                      .filter(v => typeof v === 'number')
+                      .map(v => typeof v === 'number' ? v : 0));
+                    
+                    return (
+                      <div
+                        key={modelName}
+                        style={{
+                          padding: '1rem',
+                          borderRadius: '0.75rem',
+                          backgroundColor: isSelected ? 'rgba(6, 182, 212, 0.15)' : 'rgba(30, 41, 59, 0.6)',
+                          border: `1.5px solid ${isSelected ? '#06b6d4' : '#475569'}`,
+                          textAlign: 'center',
+                          transition: 'all 0.3s'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.transform = 'translateY(-2px)';
+                          e.currentTarget.style.borderColor = '#06b6d4';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.transform = 'translateY(0)';
+                          e.currentTarget.style.borderColor = isSelected ? '#06b6d4' : '#475569';
+                        }}
+                      >
+                        <div style={{ color: '#cbd5e1', fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.35rem', textTransform: 'capitalize' }}>
+                          {modelName.replace(/_/g, ' ')}
+                          {isBest && ' 🏆'}
+                          {isSelected && ' ✓'}
+                        </div>
+                        <div style={{ color: isSelected ? '#06b6d4' : '#f1f5f9', fontSize: '1.1rem', fontWeight: '700' }}>
+                          {typeof maapeNum === 'number' ? maapeNum.toFixed(2) : 'N/A'}%
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
-          ))}
+          )}
         </div>
       )}
 

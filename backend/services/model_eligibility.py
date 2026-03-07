@@ -13,8 +13,22 @@ class ModelIneligibilityError(Exception):
 # Model eligibility requirements
 MODEL_REQUIREMENTS = {
     "moving_average": {"min_data_points": 2},
+    "weighted_moving_average": {"min_data_points": 3},
+    "holts_linear_trend": {"min_data_points": 3},
+    "polynomial_regression": {"min_data_points": 5},
+    "exponential_smoothing": {"min_data_points": 5},
+    "seasonal_naive": {"min_data_points": 7},
+    "theta": {"min_data_points": 8},
+    "arima": {"min_data_points": 10},
+    "bayesian_structural": {"min_data_points": 15},
     "prophet": {"min_data_points": 14},
+    "vector_ar": {"min_data_points": 20},
+    "xgboost": {"min_data_points": 20},
+    "random_forest": {"min_data_points": 20},
+    "gradient_boosting": {"min_data_points": 25},
+    "lstm": {"min_data_points": 30},
     "sarima": {"min_data_points": 30},
+    "neural_prophet": {"min_data_points": 30},
 }
 
 
@@ -53,12 +67,17 @@ def validate_model_selection(
     if not check_model_eligibility(model_name, data_point_count):
         min_required = MODEL_REQUIREMENTS.get(model_name, {}).get("min_data_points", 2)
         
-        if model_name == "prophet":
-            suggestion = "Consider using Moving Average which requires only 2 data points."
-        elif model_name == "sarima":
-            suggestion = "Consider using Prophet (14+ points) or Moving Average (2+ points)."
-        else:
-            suggestion = ""
+        # Provide helpful suggestions based on model and data
+        suggestions = {
+            "exponential_smoothing": "Use Moving Average (2+ points) or Exponential Smoothing (5+)",
+            "arima": "Use Moving Average (2+), Exponential Smoothing (5+), or ARIMA (10+)",
+            "prophet": "Use Moving Average (2+) or Exponential Smoothing (5+) for less data",
+            "random_forest": "Use ARIMA (10+), Prophet (14+), or Random Forest (20+)",
+            "gradient_boosting": "Use Prophet (14+) or Gradient Boosting (25+)",
+            "sarima": "Use Prophet (14+) or SARIMA (30+) for seasonal data"
+        }
+        
+        suggestion = suggestions.get(model_name, "Consider using Moving Average (2+ points)")
         
         error_msg = (
             f"{model_name} requires at least {min_required} data points, "

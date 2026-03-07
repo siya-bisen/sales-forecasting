@@ -13,7 +13,7 @@ export interface ForecastDataPoint {
 export interface ForecastRequest {
   data: ForecastDataPoint[];
   horizon: 7 | 30 | 90;
-  model: 'auto' | 'moving_average' | 'prophet' | 'sarima';
+  model: 'auto' | 'moving_average' | 'weighted_moving_average' | 'holts_linear_trend' | 'polynomial_regression' | 'exponential_smoothing' | 'seasonal_naive' | 'theta' | 'arima' | 'bayesian_structural' | 'prophet' | 'vector_ar' | 'xgboost' | 'random_forest' | 'gradient_boosting' | 'lstm' | 'sarima' | 'neural_prophet';
 }
 
 export interface SalesContext {
@@ -26,10 +26,21 @@ export interface SalesContext {
   avg_unit_price: string;
 }
 
+export interface ModelInfo {
+  description: string;
+  mape: number;
+  data_points_used: number;
+  model_type?: string;
+  key_features?: string[];
+}
+
 export interface ForecastResponse {
   data_points: number;
   model_used: string;
   model_reason: string;
+  model_info?: ModelInfo;
+  tested_models?: number;
+  model_performance?: Record<string, number>;
   confidence_level: string;
   metrics: {
     mape: number;

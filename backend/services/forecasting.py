@@ -6,6 +6,20 @@ from typing import List, Dict, Any, Optional
 from models.moving_average import MovingAverageModel
 from models.prophet_model import ProphetModel
 from models.sarima_model import SARIMAModel
+from models.exponential_smoothing import ExponentialSmoothingModel
+from models.arima_model import ARIMAModel
+from models.random_forest_model import RandomForestModel
+from models.gradient_boosting_model import GradientBoostingModel
+from models.xgboost_model import XGBoostModel
+from models.lstm_model import LSTMModel
+from models.seasonal_naive_model import SeasonalNaiveModel
+from models.holts_linear_trend_model import HoltsLinearTrendModel
+from models.bayesian_structural_model import BayesianStructuralTimeSeriesModel
+from models.vector_ar_model import VectorARModel
+from models.polynomial_regression_model import PolynomialRegressionModel
+from models.weighted_moving_average_model import WeightedMovingAverageModel
+from models.theta_method_model import ThetaMethodModel
+from models.neural_prophet_model import NeuralProphetModel
 from services.model_selector import select_best_model
 from services.evaluation import calculate_confidence_level
 from services.preprocessing import validate_and_normalize_data
@@ -35,19 +49,56 @@ def initialize_explanation_engine(gemini_api_key: Optional[str] = None) -> None:
 def create_model(model_name: str):
     """
     Factory function to create model instance.
+    Supports 17 forecasting models with auto-parameter detection.
     
     Args:
         model_name: Name of the model to create
+                   ("moving_average", "weighted_moving_average", "holts_linear_trend",
+                    "polynomial_regression", "exponential_smoothing", "seasonal_naive",
+                    "theta", "arima", "bayesian_structural", "prophet", "vector_ar",
+                    "xgboost", "random_forest", "gradient_boosting", "lstm", "sarima",
+                    "neural_prophet")
         
     Returns:
         Model instance
+        
+    Raises:
+        ValueError: If model_name is unknown
     """
     if model_name == "moving_average":
         return MovingAverageModel(window=7)
+    elif model_name == "weighted_moving_average":
+        return WeightedMovingAverageModel()
+    elif model_name == "holts_linear_trend":
+        return HoltsLinearTrendModel()
+    elif model_name == "polynomial_regression":
+        return PolynomialRegressionModel()
+    elif model_name == "exponential_smoothing":
+        return ExponentialSmoothingModel()
+    elif model_name == "seasonal_naive":
+        return SeasonalNaiveModel()
+    elif model_name == "theta":
+        return ThetaMethodModel()
+    elif model_name == "arima":
+        return ARIMAModel()
+    elif model_name == "bayesian_structural":
+        return BayesianStructuralTimeSeriesModel()
     elif model_name == "prophet":
         return ProphetModel()
+    elif model_name == "vector_ar":
+        return VectorARModel()
+    elif model_name == "xgboost":
+        return XGBoostModel()
+    elif model_name == "random_forest":
+        return RandomForestModel()
+    elif model_name == "gradient_boosting":
+        return GradientBoostingModel()
+    elif model_name == "lstm":
+        return LSTMModel()
     elif model_name == "sarima":
         return SARIMAModel()
+    elif model_name == "neural_prophet":
+        return NeuralProphetModel()
     else:
         raise ValueError(f"Unknown model: {model_name}")
 

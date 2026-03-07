@@ -21,7 +21,26 @@ class ForecastRequest(BaseModel):
     """Request model for forecast endpoint."""
     data: List[Dict[str, Any]] = Field(..., description="Time series data with 'date' and 'sales' keys, may include additional sales features")
     horizon: Literal[7, 30, 90] = Field(..., description="Forecast horizon in days")
-    model: Literal["auto", "moving_average", "prophet", "sarima"] = Field(
+    model: Literal[
+        "auto", 
+        "moving_average", 
+        "weighted_moving_average",
+        "holts_linear_trend",
+        "polynomial_regression",
+        "exponential_smoothing",
+        "seasonal_naive",
+        "theta",
+        "arima",
+        "bayesian_structural",
+        "prophet",
+        "vector_ar",
+        "xgboost",
+        "random_forest",
+        "gradient_boosting",
+        "lstm",
+        "sarima",
+        "neural_prophet"
+    ] = Field(
         default="auto",
         description="Model to use for forecasting"
     )
