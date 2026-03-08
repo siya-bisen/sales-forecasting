@@ -41,7 +41,7 @@ export interface ForecastResponse {
   model_info?: ModelInfo;
   tested_models?: number;
   model_performance?: Record<string, number>;
-  confidence_level: string;
+  confidence_level: number | string; // Can be string "95%" or number
   metrics: {
     mape: number;
   };
@@ -55,8 +55,9 @@ export interface ForecastResponse {
     trend: string;
     seasonality: string;
     volatility: string;
+    volatility_score?: number;
   };
-  explanation: string;
+  explanation: string | Record<string, string>; // Can be JSON or string
   explanation_source: 'gemini' | 'rule-based';
   notes: string[];
   sales_context: SalesContext;
@@ -72,35 +73,52 @@ export interface ExplainResponse {
 }
 
 export async function generateForecast(request: ForecastRequest): Promise<ForecastResponse> {
-  const response = await fetch(`${API_URL}/api/forecast`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  });
+  try {
+    const response = await fetch(`${API_URL}/api/forecast`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Forecast generation failed');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || error.message || 'Forecast generation failed');
+    }
+
+    const data = await response.json();
+    
+    // Ensure confidence_level is a number for consistent processing
+    if (typeof data.confidence_level === 'string') {
+      data.confidence_level = parseInt(data.confidence_level.replace('%', ''), 10);
+    }
+    
+    return data as ForecastResponse;
+  } catch (err: any) {
+    console.error('Forecast generation error:', err);
+    throw new Error(err.message || 'Failed to generate forecast');
   }
-
-  return response.json();
 }
 
 export async function explainForecast(request: ExplainRequest): Promise<ExplainResponse> {
-  const response = await fetch(`${API_URL}/api/explain`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  });
+  try {
+    const response = await fetch(`${API_URL}/api/explain`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    });
 
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || 'Explanation generation failed');
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.detail || error.message || 'Explanation generation failed');
+    }
+
+    return response.json();
+  } catch (err: any) {
+    console.error('Explanation generation error:', err);
+    throw new Error(err.message || 'Failed to generate explanation');
   }
-
-  return response.json();
 }

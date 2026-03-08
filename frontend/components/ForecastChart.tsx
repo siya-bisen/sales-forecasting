@@ -15,6 +15,16 @@ import {
   ComposedChart,
 } from 'recharts';
 import { ForecastDataPoint, ForecastResponse, generateForecast, explainForecast } from '@/lib/api';
+import { 
+  parseExplanation, 
+  getConfidenceLevel, 
+  getConfidenceColor,
+  getTrendInfo,
+  getVolatilityClassification,
+  extractSalesContext,
+  getDataQualitySummary,
+  validateForecastResponse
+} from '@/lib/dataUtils';
 
 interface ForecastChartProps {
   salesData: ForecastDataPoint[];
@@ -54,9 +64,21 @@ export default function ForecastChart({
         horizon,
         model,
       });
+      
+      // Validate forecast result
+      if (!result.forecast || result.forecast.length === 0) {
+        throw new Error('Invalid forecast data received from server');
+      }
+      
+      // Ensure numeric confidence level
+      if (typeof result.confidence_level === 'string') {
+        result.confidence_level = parseInt(result.confidence_level.replace('%', ''), 10);
+      }
+      
       onForecastGenerated(result);
     } catch (err: any) {
-      setError(err.message || 'Failed to generate forecast');
+      console.error('Forecast error:', err);
+      setError(err.message || 'Failed to generate forecast. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -172,33 +194,42 @@ export default function ForecastChart({
       )}
 
       {/* Forecast Info Cards */}
-      {forecastResult && (
+      {forecastResult && validateForecastResponse(forecastResult) && (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-            {[
-              { label: 'Data Points', value: forecastResult.data_points, icon: '📊' },
-              { label: 'Model Used', value: forecastResult.model_used, icon: '🎯' },
-              { label: 'Models Tested', value: forecastResult.tested_models || '1', icon: '🔄' },
-              { label: 'Confidence', value: `${forecastResult.confidence_level}%`, icon: '📈' },
-              { label: 'MAPE', value: `${forecastResult.metrics.mape}%`, icon: '📉' },
-              { label: 'Trend', value: forecastResult.summary.trend, icon: '⬆️' },
-            ].map((item, idx) => (
-              <div
-                key={idx}
-                style={{ padding: '1.25rem', borderRadius: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid #475569', transition: 'all 0.3s', cursor: 'default' }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#06b6d4'; e.currentTarget.style.transform = 'translateY(-4px)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#475569'; e.currentTarget.style.transform = 'translateY(0)'; }}
-              >
-                <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{item.icon}</div>
-                <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '500', marginBottom: '0.5rem' }}>
-                  {item.label}
-                </div>
-                <div style={{ color: '#f1f5f9', fontSize: '1rem', fontWeight: '600' }}>
-                  {item.value}
-                </div>
+          {(() => {
+            const confidence = getConfidenceLevel(forecastResult.confidence_level);
+            const volatility = getVolatilityClassification(forecastResult.summary.volatility);
+            const trend = getTrendInfo(forecastResult.summary.trend);
+            
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
+                {[
+                  { label: 'Data Points', value: forecastResult.data_points, icon: '📊' },
+                  { label: 'Model Used', value: forecastResult.model_used, icon: '🎯' },
+                  { label: 'Confidence', value: `${confidence}%`, icon: '📈', color: getConfidenceColor(confidence) },
+                  { label: 'MAPE', value: `${forecastResult.metrics.mape}%`, icon: '📉' },
+                  { label: 'Trend', value: trend.text, icon: trend.icon, color: trend.color },
+                  { label: 'Volatility', value: volatility.text, icon: volatility.icon, color: volatility.color },
+                ].map((item, idx) => (
+                  <div
+                    key={idx}
+                    style={{ padding: '1.25rem', borderRadius: '1rem', backgroundColor: 'rgba(30, 41, 59, 0.6)', border: '1px solid #475569', transition: 'all 0.3s', cursor: 'default' }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#06b6d4'; e.currentTarget.style.transform = 'translateY(-4px)'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#475569'; e.currentTarget.style.transform = 'translateY(0)'; }}
+                  >
+                    <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>{item.icon}</div>
+                    <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '500', marginBottom: '0.5rem' }}>
+                      {item.label}
+                    </div>
+                    <div style={{ color: item.color || '#f1f5f9', fontSize: '1rem', fontWeight: '600' }}>
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            );
+          })()}
+
 
           {/* Model Selection Reasoning */}
           {forecastResult.model_reason && (
@@ -332,14 +363,25 @@ export default function ForecastChart({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
             <h3 style={{ color: '#f1f5f9', fontSize: '1.1rem', fontWeight: '600' }}>🤖 AI Analysis with Gemini</h3>
             <span style={{ fontSize: '0.75rem', fontWeight: '600', padding: '0.5rem 0.875rem', borderRadius: '9999px', backgroundColor: 'rgba(139, 92, 246, 0.2)', color: '#a78bfa' }}>
-              ✨ AI-Powered
+              ✨ {forecastResult.explanation_source === 'gemini' ? 'AI-Powered' : 'Insights'}
             </span>
           </div>
           {/* Display Gemini explanation as JSON sections */}
           {(() => {
-            const explanation = typeof forecastResult.explanation === 'string' 
-              ? (JSON.parse(forecastResult.explanation) as Explanation)
-              : (forecastResult.explanation as unknown as Explanation | undefined);
+            let explanation: Explanation | undefined;
+            
+            // Parse explanation if it's a string (JSON)
+            if (typeof forecastResult.explanation === 'string') {
+              try {
+                explanation = JSON.parse(forecastResult.explanation) as Explanation;
+              } catch (e) {
+                // If parsing fails, treat as plain text
+                explanation = { analysis: forecastResult.explanation };
+              }
+            } else {
+              explanation = forecastResult.explanation as unknown as Explanation;
+            }
+            
             const labelMap: Record<string, string> = {
               business_context: 'Business Context',
               model_insights: 'Model Insights',
@@ -357,8 +399,22 @@ export default function ForecastChart({
                 content: String(explanation?.[key] || '') 
               }));
             
+            // If no structured sections found, add raw explanation
             if (sections.length === 0 && explanation) {
-              sections.push({ label: 'Analysis', content: JSON.stringify(explanation) });
+              if (explanation.analysis) {
+                sections.push({ label: 'Analysis', content: String(explanation.analysis) });
+              } else {
+                // Last resort: stringify any remaining content
+                const remainingKeys = Object.keys(explanation).filter(k => !labelMap[k]);
+                if (remainingKeys.length > 0) {
+                  sections.push({ label: 'Analysis', content: remainingKeys.map(k => String(explanation?.[k])).filter(v => v).join(' ') });
+                }
+              }
+            }
+            
+            // If still no sections, show message
+            if (sections.length === 0) {
+              sections.push({ label: 'Analysis', content: 'AI analysis generated. Check data quality notes for insights.' });
             }
             
             return (
@@ -366,11 +422,11 @@ export default function ForecastChart({
                 {sections.map((section) => (
                   <div key={section.label} style={{ marginBottom: '1rem' }}>
                     <h5 style={{ color: '#a78bfa', fontWeight: '600', fontSize: '1rem', marginBottom: '0.5rem' }}>{section.label}</h5>
-                    <p style={{ color: '#cbd5e1', fontSize: '0.95rem', lineHeight: '1.6' }}>{section.content}</p>
+                    <p style={{ color: '#cbd5e1', fontSize: '0.95rem', lineHeight: '1.6', margin: 0 }}>{section.content || '(No data available)'}</p>
                   </div>
                 ))}
                 <div style={{ paddingTop: '1rem', borderTop: '1px solid rgba(139, 92, 246, 0.3)' }}>
-                  <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>✓ Powered by Google Gemini AI</p>
+                  <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: 0 }}>✓ Powered by {forecastResult.explanation_source === 'gemini' ? 'Google Gemini AI' : 'Rule-Based Analysis'}</p>
                 </div>
               </div>
             );
@@ -383,55 +439,46 @@ export default function ForecastChart({
         <div style={{ padding: '1.5rem', borderRadius: '1.25rem', backgroundColor: 'rgba(34, 197, 94, 0.08)', border: '1px solid #22c55e', marginBottom: '1.5rem' }}>
           <h4 style={{ color: '#22c55e', fontWeight: '700', marginBottom: '1rem', fontSize: '1.15rem', letterSpacing: '0.02em' }}>📊 Sales Business Context</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem' }}>
-            {Object.entries(forecastResult.sales_context)
-              .filter(([_, value]) => {
-                const v = value as string | null | undefined;
-                return v && !['All', 'Not specified', 'Not analyzed', 'N/A'].includes(v);
-              })
-              .map(([key, value]) => {
-                const labelMap: Record<string, string> = {
-                  product_category: 'Product Categories',
-                  regions: 'Geographic Regions',
-                  customer_segments: 'Customer Segments',
-                  avg_marketing_spend: 'Avg Marketing Spend',
-                  promotion_impact: 'Promotion Impact',
-                  avg_quantity: 'Avg Quantity',
-                  avg_unit_price: 'Avg Unit Price',
-                };
+            {(() => {
+              const contextItems = extractSalesContext(forecastResult.sales_context);
+              
+              if (contextItems.length === 0) {
                 return (
-                  <div key={key} style={{ minWidth: '220px', flex: '1 1 220px', padding: '1rem', backgroundColor: 'rgba(34, 197, 94, 0.13)', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(34,197,94,0.08)' }}>
-                    <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.35rem' }}>{labelMap[key] || key}</div>
-                    <div style={{ color: '#16a34a', fontSize: '1.05rem', fontWeight: '700' }}>{String(value)}</div>
+                  <div style={{ width: '100%', padding: '1.5rem', backgroundColor: 'rgba(34, 197, 94, 0.08)', borderRadius: '1rem', border: '1.5px dashed #22c55e' }}>
+                    <div style={{ color: '#cbd5e1', fontSize: '1rem', marginBottom: '0.75rem', fontWeight: '600' }}>✨ Enhance Your Forecast with Business Context</div>
+                    <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1rem', lineHeight: '1.5' }}>
+                      Your CSV file only contains date and sales data. Add optional business context columns to get deeper AI insights!
+                    </p>
+                    <div style={{ backgroundColor: 'rgba(34, 197, 94, 0.15)', padding: '1rem', borderRadius: '0.75rem', marginBottom: '1rem' }}>
+                      <p style={{ color: '#22c55e', fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.5rem' }}>📋 Suggested columns to add:</p>
+                      <ul style={{ color: '#cbd5e1', fontSize: '0.85rem', marginLeft: '1.5rem', lineHeight: '1.6' }}>
+                        <li><strong>ProductCategory</strong>: Types of products (e.g., Electronics, Software)</li>
+                        <li><strong>Region</strong>: Geographic regions (e.g., North America, Europe, Asia)</li>
+                        <li><strong>CustomerSegment</strong>: Customer types (e.g., Enterprise, SMB)</li>
+                        <li><strong>MarketingSpend</strong>: Marketing investment amount</li>
+                        <li><strong>IsPromotion</strong>: Promotion active (1=yes, 0=no)</li>
+                        <li><strong>Quantity</strong>: Number of units sold</li>
+                        <li><strong>UnitPrice</strong>: Price per unit</li>
+                      </ul>
+                    </div>
+                    <p style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic' }}>
+                      With these columns, the AI will analyze product mix, regional trends, customer behavior, marketing ROI, and promotion effectiveness!
+                    </p>
                   </div>
                 );
-              })}
-            {/* Fallback if all values are default */}
-            {Object.values(forecastResult.sales_context).every((v) => {
-              const val = v as string | null | undefined;
-              return !val || ['All', 'Not specified', 'Not analyzed', 'N/A'].includes(val);
-            }) && (
-              <div style={{ width: '100%', padding: '1.5rem', backgroundColor: 'rgba(34, 197, 94, 0.08)', borderRadius: '1rem', border: '1.5px dashed #22c55e' }}>
-                <div style={{ color: '#cbd5e1', fontSize: '1rem', marginBottom: '0.75rem', fontWeight: '600' }}>✨ Enhance Your Forecast with Business Context</div>
-                <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: '1rem', lineHeight: '1.5' }}>
-                  Your CSV file only contains date and sales data. Add optional business context columns to get deeper AI insights!
-                </p>
-                <div style={{ backgroundColor: 'rgba(34, 197, 94, 0.15)', padding: '1rem', borderRadius: '0.75rem', marginBottom: '1rem' }}>
-                  <p style={{ color: '#22c55e', fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.5rem' }}>📋 Suggested columns to add:</p>
-                  <ul style={{ color: '#cbd5e1', fontSize: '0.85rem', marginLeft: '1.5rem', lineHeight: '1.6' }}>
-                    <li><strong>ProductCategory</strong>: Types of products (e.g., Electronics, Software)</li>
-                    <li><strong>Region</strong>: Geographic regions (e.g., North America, Europe, Asia)</li>
-                    <li><strong>CustomerSegment</strong>: Customer types (e.g., Enterprise, SMB)</li>
-                    <li><strong>MarketingSpend</strong>: Marketing investment amount</li>
-                    <li><strong>IsPromotion</strong>: Promotion active (1=yes, 0=no)</li>
-                    <li><strong>Quantity</strong>: Number of units sold</li>
-                    <li><strong>UnitPrice</strong>: Price per unit</li>
-                  </ul>
-                </div>
-                <p style={{ color: '#64748b', fontSize: '0.8rem', fontStyle: 'italic' }}>
-                  With these columns, the AI will analyze product mix, regional trends, customer behavior, marketing ROI, and promotion effectiveness!
-                </p>
-              </div>
-            )}
+              }
+              
+              return (
+                <>
+                  {contextItems.map(({ label, value }) => (
+                    <div key={label} style={{ minWidth: '220px', flex: '1 1 220px', padding: '1rem', backgroundColor: 'rgba(34, 197, 94, 0.13)', borderRadius: '1rem', boxShadow: '0 2px 8px rgba(34,197,94,0.08)' }}>
+                      <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.35rem' }}>{label}</div>
+                      <div style={{ color: '#16a34a', fontSize: '1.05rem', fontWeight: '700' }}>{value}</div>
+                    </div>
+                  ))}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -441,52 +488,54 @@ export default function ForecastChart({
         <div style={{ padding: '1.5rem', borderRadius: '1.25rem', backgroundColor: 'rgba(6, 182, 212, 0.08)', border: '1px solid #06b6d4', marginBottom: '1.5rem' }}>
           <h4 style={{ color: '#06b6d4', fontWeight: '700', marginBottom: '1rem', fontSize: '1.15rem', letterSpacing: '0.02em' }}>📋 Data Quality & Insights</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {forecastResult.notes.map((note: string, idx: number) => {
-              const noteStr = String(note);
-              const isWarning = noteStr.includes('⚠️');
-              const isPositive = noteStr.includes('✓');
+            {(() => {
+              const { warnings, positives, neutral } = getDataQualitySummary(forecastResult.notes);
+              const allNotes = [...warnings, ...positives, ...neutral];
               
-              let bgColor = 'rgba(6, 182, 212, 0.15)';
-              let borderColor = '#06b6d4';
-              let iconColor = '#06b6d4';
-              
-              if (isWarning) {
-                bgColor = 'rgba(245, 158, 11, 0.15)';
-                borderColor = '#f59e0b';
-                iconColor = '#f59e0b';
-              } else if (isPositive) {
-                bgColor = 'rgba(34, 197, 94, 0.15)';
-                borderColor = '#22c55e';
-                iconColor = '#22c55e';
-              }
-              
-              const spaceIndex = noteStr.indexOf(' ');
-              const icon = spaceIndex > 0 ? noteStr.substring(0, spaceIndex) : noteStr.charAt(0);
-              const text = spaceIndex > 0 ? noteStr.substring(spaceIndex + 1) : noteStr;
-              
-              return (
-                <div
-                  key={idx}
-                  style={{
-                    padding: '0.875rem 1rem',
-                    borderRadius: '0.875rem',
-                    backgroundColor: bgColor,
-                    border: `1px solid ${borderColor}`,
-                    color: '#cbd5e1',
-                    fontSize: '0.9rem',
-                    lineHeight: '1.6',
-                    display: 'flex',
-                    gap: '0.75rem',
-                    alignItems: 'flex-start'
-                  }}
-                >
-                  <span style={{ color: iconColor, flexShrink: 0, marginTop: '0.05rem' }}>
-                    {icon}
-                  </span>
-                  <span>{text}</span>
-                </div>
-              );
-            })}
+              return allNotes.map((note: string, idx: number) => {
+                const noteStr = String(note);
+                const isWarning = noteStr.includes('⚠️');
+                const isPositive = noteStr.includes('✓');
+                
+                let bgColor = 'rgba(6, 182, 212, 0.15)';
+                let borderColor = '#06b6d4';
+                
+                if (isWarning) {
+                  bgColor = 'rgba(245, 158, 11, 0.15)';
+                  borderColor = '#f59e0b';
+                } else if (isPositive) {
+                  bgColor = 'rgba(34, 197, 94, 0.15)';
+                  borderColor = '#22c55e';
+                }
+                
+                const spaceIndex = noteStr.indexOf(' ');
+                const icon = spaceIndex > 0 ? noteStr.substring(0, spaceIndex) : noteStr.charAt(0);
+                const text = spaceIndex > 0 ? noteStr.substring(spaceIndex + 1) : noteStr;
+                
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      padding: '0.875rem 1rem',
+                      borderRadius: '0.875rem',
+                      backgroundColor: bgColor,
+                      border: `1px solid ${borderColor}`,
+                      color: '#cbd5e1',
+                      fontSize: '0.9rem',
+                      lineHeight: '1.6',
+                      display: 'flex',
+                      gap: '0.75rem',
+                      alignItems: 'flex-start'
+                    }}
+                  >
+                    <span style={{ color: borderColor, flexShrink: 0, marginTop: '0.05rem', fontSize: '1.1rem' }}>
+                      {icon}
+                    </span>
+                    <span>{text}</span>
+                  </div>
+                );
+              });
+            })()}
           </div>
           <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid rgba(6, 182, 212, 0.3)' }}>
             <p style={{ color: '#64748b', fontSize: '0.8rem', margin: 0 }}>
@@ -499,7 +548,7 @@ export default function ForecastChart({
         <div style={{ padding: '1.5rem', borderRadius: '1.25rem', backgroundColor: 'rgba(6, 182, 212, 0.08)', border: '1px solid #06b6d4', marginBottom: '1.5rem' }}>
           <h4 style={{ color: '#06b6d4', fontWeight: '700', marginBottom: '1rem', fontSize: '1.15rem', letterSpacing: '0.02em' }}>📋 Data Quality & Insights</h4>
           <div style={{ padding: '1rem', borderRadius: '0.875rem', backgroundColor: 'rgba(6, 182, 212, 0.15)', border: '1px solid #06b6d4', color: '#cbd5e1', fontSize: '0.9rem' }}>
-            ✓ Data quality analysis complete
+            ✓ Data quality analysis complete - no issues detected
           </div>
         </div>
       )}

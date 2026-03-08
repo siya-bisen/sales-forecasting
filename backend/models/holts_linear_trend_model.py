@@ -31,21 +31,22 @@ class HoltsLinearTrendModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Holt's Linear Trend model.
+        Fit Holt's Linear Trend model with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 3:
+            raise ValueError(f"Need at least 3 data points (have {len(values) if values else 0})")
         
-        if len(values_array) < 3:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 3 data points"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 3:
+            raise ValueError("Not enough valid data points")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         try:
@@ -70,18 +71,16 @@ class HoltsLinearTrendModel:
                 "beta": round(float(self.beta), 4),
                 "trend_direction": trend_direction,
                 "data_points_used": len(values_array),
+                "fitted": True,
                 "interpretation": f"Linear trend with {trend_direction} direction",
                 "message": "Exponential smoothing with explicit trend component"
             }
         except Exception as e:
-            self.metadata = {
-                "status": "fitting_error",
-                "message": f"Failed to fit model: {str(e)}"
-            }
+            raise ValueError(f"Failed to fit model: {str(e)}")
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate forecast using Holt's Linear Trend.
+        Generate forecast using Holt's Linear Trend with robust bounds.
         
         Args:
             horizon: Number of days to forecast
@@ -90,49 +89,44 @@ class HoltsLinearTrendModel:
             Dictionary with forecast data and metadata
         """
         if self.model is None or self.values is None:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "holts_linear_trend",
-                "trend": self.trend,
-                "seasonality": "none"
-            }
+            raise ValueError("Model must be fitted before forecasting")
+        
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
         
         try:
             # Get forecast
             forecast_result = self.model.get_forecast(steps=horizon)
-            forecast_values = forecast_result.predicted_mean.tolist()
+            forecast_values = [max(0, float(v)) for v in forecast_result.predicted_mean.tolist()]
             
             # Get confidence intervals
-            confidence_intervals = forecast_result.conf_int(alpha=0.05)
-            lower_bounds = confidence_intervals.iloc[:, 0].tolist()
-            upper_bounds = confidence_intervals.iloc[:, 1].tolist()
+            try:
+                confidence_intervals = forecast_result.conf_int(alpha=0.05)
+                lower_bounds = [max(0, float(v)) for v in confidence_intervals.iloc[:, 0].tolist()]
+                upper_bounds = [max(0, float(v)) for v in confidence_intervals.iloc[:, 1].tolist()]
+            except Exception:
+                # Fallback: use standard error
+                std_error = np.std(forecast_values) if np.std(forecast_values) > 0 else np.mean(forecast_values) * 0.1
+                lower_bounds = [max(0, v - 1.96 * std_error) for v in forecast_values]
+                upper_bounds = [v + 1.96 * std_error for v in forecast_values]
+            
+            # Ensure bounds are valid
+            for i in range(len(forecast_values)):
+                lower_bounds[i] = min(lower_bounds[i], forecast_values[i])
+                upper_bounds[i] = max(upper_bounds[i], forecast_values[i])
             
             return {
                 "forecast": forecast_values,
                 "lower": lower_bounds,
                 "upper": upper_bounds,
                 "model_name": "holts_linear_trend",
-                "trend": self.trend,
-                "seasonality": "none"
+                "trend": self._detect_trend(),
+                "seasonality": "none",
+                "alpha": float(self.alpha) if self.alpha else None,
+                "beta": float(self.beta) if self.beta else None
             }
-        except Exception:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "holts_linear_trend",
-                "trend": self.trend,
-                "seasonality": "none"
-            }
-            confidence_intervals = forecast_result.conf_int(alpha=0.05)
-            lower_bounds = confidence_intervals.iloc[:, 0].tolist()
-            upper_bounds = confidence_intervals.iloc[:, 1].tolist()
-            
-            return forecast_values, lower_bounds, upper_bounds
-        except Exception:
-            return [np.nan] * horizon, [np.nan] * horizon, [np.nan] * horizon
+        except Exception as e:
+            raise ValueError(f"Forecast generation failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""

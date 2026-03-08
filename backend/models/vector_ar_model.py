@@ -33,28 +33,25 @@ class VectorARModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit VAR model on time series data.
+        Fit VAR model on time series data with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
         if not STATSMODELS_AVAILABLE:
-            self.metadata = {
-                "status": "statsmodels_required",
-                "message": "statsmodels library needed for VAR"
-            }
-            return
+            raise ValueError("statsmodels library is required for VAR model")
         
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 10:
+            raise ValueError(f"Need at least 10 data points for VAR (have {len(values) if values else 0})")
         
-        if len(values_array) < 10:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 10 data points for VAR"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 10:
+            raise ValueError("Not enough valid data points for VAR")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         try:
@@ -66,7 +63,8 @@ class VectorARModel:
             var_model = VAR(data_multivariate)
             
             # Select optimal lag order
-            lag_order = var_model.select_order(maxlags=5).aic
+            lag_order = var_model.select_order(maxlags=min(5, len(values_array) // 5)).aic
+            lag_order = max(1, min(lag_order, 5))  # Constrain lag order
             
             # Fit with selected lag order
             self.model = var_model.fit(lag_order)
@@ -79,65 +77,68 @@ class VectorARModel:
                 "lag_order": lag_order,
                 "n_series": data_multivariate.shape[1],
                 "data_points_used": len(values_array),
+                "fitted": True,
                 "interpretation": f"VAR({lag_order}) model with {data_multivariate.shape[1]} series",
                 "message": "Captures complex interdependencies in time series"
             }
         except Exception as e:
-            self.metadata = {
-                "status": "fitting_error",
-                "message": f"VAR fitting failed: {str(e)}"
-            }
+            raise ValueError(f"VAR fitting failed: {str(e)}")
     
-    def forecast(self, horizon: int) -> Tuple[List[float], List[float], List[float]]:
+    def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate VAR forecast.
+        Generate VAR forecast with bounds validation.
         
         Args:
             horizon: Number of days to forecast
             
         Returns:
-            Tuple of (forecast, lower_bound, upper_bound)
+            Dictionary with forecast values and confidence intervals
         """
         if self.model is None or self.values is None:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "vector_ar",
-                "trend": "stable",
-                "seasonality": "none"
-            }
+            raise ValueError("Model must be fitted before forecasting")
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
         
         try:
             # Get forecast from VAR model
             forecast_result = self.model.get_forecast(steps=horizon)
             forecast_array = forecast_result.forecast()
             
-            # Extract primary series forecast (first column)
-            forecast_values = forecast_array[:, 0].tolist()
+            # Extract primary series forecast (first column) and apply non-negative constraint
+            forecast_values = [max(0, float(v)) for v in forecast_array[:, 0].tolist()]
             
             # Get confidence intervals
-            ci = forecast_result.conf_int(alpha=0.05)
-            lower_bounds = ci[:, 0, 0].tolist()
-            upper_bounds = ci[:, 1, 0].tolist()
+            try:
+                ci = forecast_result.conf_int(alpha=0.05)
+                lower_bounds = [max(0, float(v)) for v in ci[:, 0, 0].tolist()]
+                upper_bounds = [float(v) for v in ci[:, 1, 0].tolist()]
+            except Exception:
+                # Fallback: use residual-based confidence intervals
+                residuals = self.values - self.model.fittedvalues[:, 0]
+                std_error = np.std(residuals) if np.std(residuals) > 0 else np.mean(forecast_values) * 0.1
+                
+                lower_bounds = [max(0, v - 1.96 * std_error) for v in forecast_values]
+                upper_bounds = [v + 1.96 * std_error for v in forecast_values]
+            
+            # Validate bounds
+            for i in range(len(forecast_values)):
+                lower_bounds[i] = min(lower_bounds[i], forecast_values[i])
+                upper_bounds[i] = max(upper_bounds[i], forecast_values[i])
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
             
             return {
-                "forecast": forecast_values,
-                "lower": lower_bounds,
-                "upper": upper_bounds,
-                "model_name": "vector_ar",
-                "trend": "stable",
-                "seasonality": "none"
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
+                "confidence_level": 0.95,
+                "method": "Vector Autoregression"
             }
-        except Exception:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "vector_ar",
-                "trend": "stable",
-                "seasonality": "none"
-            }
+        except Exception as e:
+            raise ValueError(f"VAR forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""

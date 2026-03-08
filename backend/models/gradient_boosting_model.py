@@ -83,41 +83,56 @@ class GradientBoostingModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Gradient Boosting model to historical data.
+        Fit Gradient Boosting model to historical data with adaptive parameters.
         
         Args:
             dates: List of date strings (YYYY-MM-DD)
             values: List of sales values
         """
-        if len(values) < 5:
-            raise ValueError("Gradient Boosting requires at least 5 data points")
-        
-        # Determine lookback period
-        lookback = min(7, len(values) - 2)
-        
+        # Validate and clean input
         try:
+            values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+            
+            if len(values_clean) < 5:
+                raise ValueError(f"Gradient Boosting requires at least 5 data points (have {len(values_clean)})")
+            
+            values_array = np.array(values_clean, dtype=float)
+            
+            # Determine lookback period
+            lookback = min(7, max(3, len(values_array) - 2))
+            self.lookback = lookback
+            
             # Create features
-            X, y = self._create_features(np.array(values), lookback)
+            X, y = self._create_features(values_array, lookback)
             
             if len(X) < 2:
-                raise ValueError("Not enough data points to create features")
+                raise ValueError(f"Not enough data points to create features (created {len(X)})")
             
             # Scale features
             X_scaled = self.scaler.fit_transform(X)
             
-            # Train Gradient Boosting
+            # Determine adaptive hyperparameters
+            n_est = max(20, min(100, len(X) // 2)) if self.n_estimators is None or self.n_estimators == 50 else self.n_estimators
+            lr = 0.05 if self.learning_rate is None or self.learning_rate == 0.05 else self.learning_rate
+            max_d = min(8, max(3, int(np.sqrt(X.shape[1])))) if self.max_depth is None or self.max_depth == 5 else self.max_depth
+            
+            # Train Gradient Boosting with optimized parameters
             self.model = GradientBoostingRegressor(
-                n_estimators=self.n_estimators,
-                learning_rate=self.learning_rate,
-                max_depth=self.max_depth,
-                min_samples_split=2,
-                min_samples_leaf=1,
+                n_estimators=n_est,
+                learning_rate=lr,
+                max_depth=max_d,
+                min_samples_split=max(2, len(X) // 10),
+                min_samples_leaf=max(1, len(X) // 20),
+                subsample=0.8,
                 loss='squared_error',
-                random_state=42
+                random_state=42,
+                verbose=0
             )
             self.model.fit(X_scaled, y)
             
-            # Store feature importances
+            # Store feature importances and metadata
+            self.last_values = values_clean[-lookback:] if len(values_clean) >= lookback else values_clean
+            self.fitted = True
             feature_names = (
                 [f"lag_{i+1}" for i in range(lookback)] +
                 ["mean", "std", "min", "max", "ma_3", "ma_7", "trend", "momentum", "day_of_week"]
@@ -133,7 +148,7 @@ class GradientBoostingModel:
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate forecast for specified horizon.
+        Generate forecast for specified horizon with robust bounds validation.
         
         Args:
             horizon: Number of days to forecast
@@ -143,6 +158,8 @@ class GradientBoostingModel:
         """
         if not self.fitted or self.model is None:
             raise ValueError("Model must be fitted before forecasting")
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
         
         try:
             forecast_values = []
@@ -187,20 +204,41 @@ class GradientBoostingModel:
             
             # Estimate confidence intervals using model performance
             residual_std = np.std(forecast_values) * 0.2 if len(forecast_values) > 1 else np.mean(forecast_values) * 0.15
+            if residual_std == 0:
+                residual_std = np.mean(forecast_values) * 0.1
             
-            lower_bounds = [max(0, v - 1.96 * residual_std) for v in forecast_values]
-            upper_bounds = [v + 1.96 * residual_std for v in forecast_values]
+            lower_bounds = []
+            upper_bounds = []
+            
+            for i, fv in enumerate(forecast_values):
+                # Increase uncertainty with horizon
+                adjusted_std = residual_std * np.sqrt(1 + i * 0.08)
+                lower = max(0, fv - 1.96 * adjusted_std)
+                upper = fv + 1.96 * adjusted_std
+                
+                # Ensure bounds are valid
+                lower = min(lower, fv)
+                upper = max(upper, fv)
+                
+                lower_bounds.append(lower)
+                upper_bounds.append(upper)
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
             
             return {
-                "forecast": forecast_values,
-                "lower": lower_bounds,
-                "upper": upper_bounds,
-                "model_name": "gradient_boosting",
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
                 "lookback": self.lookback,
+                "confidence_level": 0.95,
+                "method": "Gradient Boosting",
                 "top_features": dict(sorted(self.feature_importance.items(), key=lambda x: x[1], reverse=True)[:5])
             }
         except Exception as e:
-            raise ValueError(f"Forecast generation failed: {str(e)}")
+            raise ValueError(f"Gradient Boosting forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata for explanation."""

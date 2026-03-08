@@ -110,7 +110,7 @@ def generate_forecast(
 ) -> Dict[str, Any]:
     """
     Generate sales forecast using specified or auto-selected model.
-    Enhanced with sales-specific metadata extraction.
+    Enhanced with sales-specific metadata extraction and robust error handling.
     
     Args:
         data: List of dictionaries with 'date' and 'sales' keys (may include additional sales features)
@@ -157,6 +157,13 @@ def generate_forecast(
         for i in range(horizon)
     ]
     
+    # Handle standardized model output keys (lower_bounds/upper_bounds)
+    lower_key = "lower_bounds" if "lower_bounds" in forecast_result else "lower"
+    upper_key = "upper_bounds" if "upper_bounds" in forecast_result else "upper"
+    
+    forecast_lower = forecast_result.get(lower_key, forecast_result.get("lower", []))
+    forecast_upper = forecast_result.get(upper_key, forecast_result.get("upper", []))
+    
     # Format forecast output
     forecast_output = [
         {
@@ -168,8 +175,8 @@ def generate_forecast(
         for date, value, lower, upper in zip(
             forecast_dates,
             forecast_result["forecast"],
-            forecast_result["lower"],
-            forecast_result["upper"]
+            forecast_lower,
+            forecast_upper
         )
     ]
     
@@ -177,10 +184,25 @@ def generate_forecast(
     model_metadata = model.get_metadata()
     
     # Determine trend and seasonality from forecast
+    # All improved models now provide 'trend' field with direction
     trend = forecast_result.get("trend", "stable")
+    
+    # Map trend values for consistency
+    trend_map = {"upward": "upward", "downward": "downward", "flat": "flat", "stable": "stable"}
+    trend = trend_map.get(trend, "stable")
+    
     seasonality = forecast_result.get("seasonality", "none")
     if not seasonality and metadata.get("has_seasonality"):
         seasonality = "weekly"  # Default if detected but not in result
+    
+    # Volatility interpretation
+    volatility = metadata["volatility"]
+    if volatility < 0.1:
+        volatility_text = "low"
+    elif volatility < 0.25:
+        volatility_text = "moderate"
+    else:
+        volatility_text = "high"
     
     # Build comprehensive result with sales context
     result = {
@@ -194,7 +216,8 @@ def generate_forecast(
         "summary": {
             "trend": trend,
             "seasonality": seasonality,
-            "volatility": metadata["volatility"]
+            "volatility": volatility_text,
+            "volatility_score": round(volatility, 3)
         },
         "metadata": {
             "data_points": len(values),

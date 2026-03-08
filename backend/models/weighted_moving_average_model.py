@@ -2,28 +2,20 @@
 Weighted Moving Average Model
 Enhanced moving average with custom weights.
 Recent values have higher influence on forecast.
+Improved with robust validation and adaptive parameters.
 """
 import numpy as np
 from typing import List, Dict, Any, Tuple
+import warnings
+warnings.filterwarnings('ignore')
 
 
 class WeightedMovingAverageModel:
-    """
-    Weighted Moving Average forecasting model.
-    Moving average with linearly increasing weights.
-    Recent observations have more influence.
-    
-    Features:
-    - Auto-detects optimal window size
-    - Weights decline linearly into past
-    - Simple and fast
-    - Interpretable results
-    - Good for trending data
-    """
+    """Weighted Moving Average forecasting model with enhanced robustness."""
     
     def __init__(self, window: int = None):
         """
-        Initialize Weighted Moving Average model.
+        Initialize Weighted Moving Average model with adaptive window.
         
         Args:
             window: Window size (auto-selected if None)
@@ -32,33 +24,35 @@ class WeightedMovingAverageModel:
         self.values = None
         self.weights = None
         self.metadata = {}
+        self.fitted = False
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Weighted Moving Average model.
+        Fit Weighted Moving Average model with validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 2:
+            raise ValueError(f"Need at least 2 data points (have {len(values) if values else 0})")
         
-        if len(values_array) < 3:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 3 data points"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 2:
+            raise ValueError("Not enough valid data points")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         # Auto-detect window size if not provided
         if self.window is None:
             self.window = self._auto_select_window(values_array)
         else:
-            self.window = min(max(3, self.window), len(values_array))
+            self.window = min(max(2, self.window), len(values_array))
         
-        # Create linearly increasing weights
+        # Create linearly increasing weights (recent values have more weight)
         self.weights = np.linspace(1, self.window, self.window)
         self.weights = self.weights / np.sum(self.weights)  # Normalize
         
@@ -75,8 +69,10 @@ class WeightedMovingAverageModel:
             "autocorrelation": round(autocorr, 3),
             "data_points_used": len(values_array),
             "interpretation": f"WMA({self.window}) with linearly increasing weights",
+            "fitted": True,
             "message": "Recent values have higher influence on forecast"
         }
+        self.fitted = True
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
@@ -88,30 +84,44 @@ class WeightedMovingAverageModel:
         Returns:
             Dictionary with forecast data and metadata
         """
-        if self.values is None or self.weights is None:
+        if not self.fitted or self.values is None or self.weights is None:
+            raise ValueError("Model must be fitted before forecasting")
+        
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
+        
+        try:
+            forecast_values = []
+            current_window = self.values[-self.window:].copy()
+            
+            for _ in range(horizon):
+                # Calculate weighted average
+                wma = float(np.sum(current_window * self.weights))
+                forecast_values.append(max(0, wma))
+                
+                # Update window: remove oldest, add newest
+                current_window = np.concatenate([current_window[1:], [wma]])
+            
+            # Calculate uncertainty based on historical volatility
+            residuals = self._calculate_residuals()
+            residual_std = np.std(residuals) if len(residuals) > 0 else np.mean(forecast_values) * 0.1
+            if residual_std == 0:
+                residual_std = np.mean(forecast_values) * 0.1 if np.mean(forecast_values) > 0 else 1
+            
+            lower_bounds = [max(0, v - 1.96 * residual_std) for v in forecast_values]
+            upper_bounds = [v + 1.96 * residual_std for v in forecast_values]
+            
             return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
+                "forecast": forecast_values,
+                "lower": lower_bounds,
+                "upper": upper_bounds,
                 "model_name": "weighted_moving_average",
-                "trend": "stable",
+                "window": self.window,
+                "trend": self._detect_trend(),
                 "seasonality": "none"
             }
-        
-        forecast_values = []
-        current_window = self.values[-self.window:].copy()
-        
-        for _ in range(horizon):
-            # Calculate weighted average
-            wma = np.sum(current_window * self.weights)
-            forecast_values.append(wma)
-            
-            # Update window: remove oldest, add newest
-            current_window = np.concatenate([current_window[1:], [wma]])
-        
-        # Calculate uncertainty based on historical volatility
-        residuals = self._calculate_residuals()
-        residual_std = np.std(residuals) if len(residuals) > 0 else 1.0
+        except Exception as e:
+            raise ValueError(f"Forecast generation failed: {str(e)}")
         
         lower_bounds = [v - 1.96 * residual_std for v in forecast_values]
         upper_bounds = [v + 1.96 * residual_std for v in forecast_values]

@@ -35,28 +35,25 @@ class BayesianStructuralTimeSeriesModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Bayesian Structural Time Series model.
+        Fit Bayesian Structural Time Series model with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
         if not STATSMODELS_AVAILABLE:
-            self.metadata = {
-                "status": "statsmodels_required",
-                "message": "statsmodels library needed for BSTS"
-            }
-            return
+            raise ValueError("statsmodels library is required for BSTS model")
         
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 5:
+            raise ValueError(f"Need at least 5 data points for BSTS (have {len(values) if values else 0})")
         
-        if len(values_array) < 5:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 5 data points for BSTS"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 5:
+            raise ValueError("Not enough valid data points for BSTS")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         try:
@@ -82,18 +79,16 @@ class BayesianStructuralTimeSeriesModel:
                 "trend_strength": round(self.trend_component, 3) if self.trend_component else 0,
                 "level_variance": round(float(np.var(self.values)), 2),
                 "data_points_used": len(values_array),
+                "fitted": True,
                 "interpretation": "Probabilistic model with uncertainty quantification",
                 "message": "BSTS captures level, trend, and irregular components"
             }
         except Exception as e:
-            self.metadata = {
-                "status": "fitting_error",
-                "message": f"Failed to fit BSTS: {str(e)}"
-            }
+            raise ValueError(f"Failed to fit Bayesian Structural model: {str(e)}")
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate forecast with uncertainty intervals.
+        Generate forecast with uncertainty intervals and bounds validation.
         
         Args:
             horizon: Number of days to forecast
@@ -102,42 +97,47 @@ class BayesianStructuralTimeSeriesModel:
             Dictionary with forecast data and metadata
         """
         if self.model is None or self.values is None:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "bayesian_structural",
-                "trend": "stable",
-                "seasonality": "none"
-            }
+            raise ValueError("Model must be fitted before forecasting")
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
         
         try:
             # Get forecast with confidence intervals
             forecast_result = self.model.get_forecast(steps=horizon)
-            forecast_values = forecast_result.predicted_mean.tolist()
+            forecast_values = [max(0, float(v)) for v in forecast_result.predicted_mean.tolist()]
             
             # Get 95% confidence intervals
-            ci = forecast_result.conf_int(alpha=0.05)
-            lower_bounds = ci.iloc[:, 0].tolist()
-            upper_bounds = ci.iloc[:, 1].tolist()
+            try:
+                ci = forecast_result.conf_int(alpha=0.05)
+                lower_bounds = [max(0, float(v)) for v in ci.iloc[:, 0].tolist()]
+                upper_bounds = [float(v) for v in ci.iloc[:, 1].tolist()]
+            except Exception:
+                # Fallback: use residual-based confidence intervals
+                residuals = self.values - self.model.fittedvalues
+                std_error = np.std(residuals) if np.std(residuals) > 0 else np.mean(forecast_values) * 0.1
+                
+                lower_bounds = [max(0, v - 1.96 * std_error) for v in forecast_values]
+                upper_bounds = [v + 1.96 * std_error for v in forecast_values]
+            
+            # Validate bounds
+            for i in range(len(forecast_values)):
+                lower_bounds[i] = min(lower_bounds[i], forecast_values[i])
+                upper_bounds[i] = max(upper_bounds[i], forecast_values[i])
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
             
             return {
-                "forecast": forecast_values,
-                "lower": lower_bounds,
-                "upper": upper_bounds,
-                "model_name": "bayesian_structural",
-                "trend": "stable",
-                "seasonality": "none"
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
+                "confidence_level": 0.95,
+                "method": "Bayesian Structural Time Series"
             }
-        except Exception:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "bayesian_structural",
-                "trend": "stable",
-                "seasonality": "none"
-            }
+        except Exception as e:
+            raise ValueError(f"Bayesian structural forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""

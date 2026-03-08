@@ -37,21 +37,22 @@ class ThetaMethodModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Theta Method model.
+        Fit Theta Method model with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 3:
+            raise ValueError(f"Need at least 3 data points (have {len(values) if values else 0})")
         
-        if len(values_array) < 5:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 5 data points"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 3:
+            raise ValueError("Not enough valid data points")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         # Extract trend component using simple exponential smoothing
@@ -70,13 +71,14 @@ class ThetaMethodModel:
             "trend_strength": round(trend_strength, 3),
             "seasonality_present": seasonality,
             "data_points_used": len(values_array),
+            "fitted": True,
             "interpretation": "Decomposes into trend and detrended components",
             "message": "Theta method - excellent for short-term forecasts"
         }
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate Theta Method forecast.
+        Generate Theta Method forecast with robust bounds validation.
         
         Args:
             horizon: Number of days to forecast
@@ -85,44 +87,57 @@ class ThetaMethodModel:
             Dictionary with forecast data and metadata
         """
         if self.values is None or self.trend is None:
+            raise ValueError("Model must be fitted before forecasting")
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
+        
+        try:
+            # Extrapolate trend
+            trend_forecast = self._extrapolate_trend(horizon)
+            
+            # Forecast detrended component (simple exponential smoothing)
+            detrended_forecast = self._forecast_detrended(horizon)
+            
+            # Combine components
+            forecast_values = []
+            for i in range(horizon):
+                combined = max(0, trend_forecast[i] + detrended_forecast[i])
+                forecast_values.append(combined)
+            
+            # Calculate confidence intervals from residuals
+            residuals = self.values - (self.trend + self.detrended)
+            residual_std = np.std(residuals) if np.std(residuals) > 0 else np.mean(forecast_values) * 0.1
+            
+            lower_bounds = []
+            upper_bounds = []
+            
+            for i, fv in enumerate(forecast_values):
+                # Increase uncertainty with horizon
+                adjusted_std = residual_std * np.sqrt(1 + i * 0.08)
+                lower = max(0, fv - 1.96 * adjusted_std)
+                upper = fv + 1.96 * adjusted_std
+                
+                # Ensure bounds are valid
+                lower = min(lower, fv)
+                upper = max(upper, fv)
+                
+                lower_bounds.append(lower)
+                upper_bounds.append(upper)
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
+            
             return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "theta",
-                "trend": "stable",
-                "seasonality": "none"
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
+                "confidence_level": 0.95,
+                "method": "Theta Method"
             }
-        
-        forecast_values = []
-        n = len(self.values)
-        
-        # Extrapolate trend
-        trend_forecast = self._extrapolate_trend(horizon)
-        
-        # Forecast detrended component (simple exponential smoothing)
-        detrended_forecast = self._forecast_detrended(horizon)
-        
-        # Combine components
-        for i in range(horizon):
-            combined = trend_forecast[i] + detrended_forecast[i]
-            forecast_values.append(combined)
-        
-        # Calculate confidence intervals
-        residuals = self.values - (self.trend + self.detrended)
-        residual_std = np.std(residuals)
-        
-        lower_bounds = [v - 1.96 * residual_std for v in forecast_values]
-        upper_bounds = [v + 1.96 * residual_std for v in forecast_values]
-        
-        return {
-            "forecast": forecast_values,
-            "lower": lower_bounds,
-            "upper": upper_bounds,
-            "model_name": "theta",
-            "trend": "stable",
-            "seasonality": "none"
-        }
+        except Exception as e:
+            raise ValueError(f"Theta method forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""

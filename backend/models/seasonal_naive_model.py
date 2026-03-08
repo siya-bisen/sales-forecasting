@@ -34,41 +34,49 @@ class SeasonalNaiveModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit Seasonal Naive model (no actual fitting needed).
+        Fit Seasonal Naive model with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 2:
+            raise ValueError(f"Need at least 2 data points (have {len(values) if values else 0})")
         
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 2:
+            raise ValueError("Not enough valid data points")
+        
+        values_array = np.array(values_clean, dtype=float)
+        
+        # Ensure we have enough data for seasonal period
         if len(values_array) < self.seasonal_period:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": f"Need at least {self.seasonal_period} data points"
-            }
-            return
+            self.seasonal_period = min(max(2, len(values_array) // 2), 7)
         
         self.values = values_array
         
         # Detect seasonality strength
         seasonality_score = self._calculate_seasonality_strength()
         
-        # Auto-detect seasonal period if needed
-        self._detect_seasonal_period()
+        # Auto-detect seasonal period if data supports it
+        if len(values_array) >= 14:
+            self._detect_seasonal_period()
         
         self.metadata = {
             "type": "Seasonal Naive",
             "seasonal_period": self.seasonal_period,
             "data_points_used": len(values_array),
             "seasonality_strength": round(seasonality_score, 3),
+            "fitted": True,
             "interpretation": f"Repeats pattern from {self.seasonal_period} periods ago",
             "message": "Simple seasonal baseline - excellent for highly seasonal data"
         }
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate seasonal naive forecast.
+        Generate seasonal naive forecast with robust bounds.
         
         Args:
             horizon: Number of days to forecast
@@ -77,37 +85,40 @@ class SeasonalNaiveModel:
             Dictionary with forecast data and metadata
         """
         if self.values is None or len(self.values) < self.seasonal_period:
+            raise ValueError("Model must be fitted before forecasting")
+        
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
+        
+        try:
+            forecast_values = []
+            n = len(self.values)
+            
+            # Repeat values from same season
+            for i in range(horizon):
+                idx = (n - self.seasonal_period + (i % self.seasonal_period)) % n
+                val = float(self.values[idx])
+                forecast_values.append(max(0, val))
+            
+            # Calculate seasonal standard deviation for bounds
+            seasonal_std = self._calculate_seasonal_std()
+            if seasonal_std == 0:
+                seasonal_std = np.mean(forecast_values) * 0.1 if np.mean(forecast_values) > 0 else 1
+            
+            lower_bounds = [max(0, v - 1.96 * seasonal_std) for v in forecast_values]
+            upper_bounds = [v + 1.96 * seasonal_std for v in forecast_values]
+            
             return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
+                "forecast": forecast_values,
+                "lower": lower_bounds,
+                "upper": upper_bounds,
                 "model_name": "seasonal_naive",
+                "seasonal_period": self.seasonal_period,
                 "trend": "stable",
                 "seasonality": "detected"
             }
-        
-        forecast_values = []
-        n = len(self.values)
-        
-        # Repeat values from same season
-        for i in range(horizon):
-            idx = (n - self.seasonal_period + (i % self.seasonal_period)) % n
-            forecast_values.append(self.values[idx])
-        
-        # Calculate seasonal standard deviation for bounds
-        seasonal_std = self._calculate_seasonal_std()
-        
-        lower_bounds = [v - 1.96 * seasonal_std for v in forecast_values]
-        upper_bounds = [v + 1.96 * seasonal_std for v in forecast_values]
-        
-        return {
-            "forecast": forecast_values,
-            "lower": lower_bounds,
-            "upper": upper_bounds,
-            "model_name": "seasonal_naive",
-            "trend": "stable",
-            "seasonality": "detected"
-        }
+        except Exception as e:
+            raise ValueError(f"Forecast generation failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""

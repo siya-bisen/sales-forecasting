@@ -34,35 +34,36 @@ class NeuralProphetModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit NeuralProphet model.
+        Fit NeuralProphet model with robust validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
+        # Validate input
+        if not values or len(values) < 10:
+            raise ValueError(f"Need at least 10 data points (have {len(values) if values else 0})")
+        
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 10:
+            raise ValueError("Not enough valid data points for NeuralProphet")
+        
+        values_array = np.array(values_clean, dtype=float)
+        self.values = values_array
+        
         if not NEURALPROPHET_AVAILABLE:
             # Fallback to manual implementation
-            self._fit_fallback(dates, values)
+            self._fit_fallback(values_array)
             return
-        
-        values_array = np.array(values, dtype=float)
-        
-        if len(values_array) < 10:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 10 data points"
-            }
-            return
-        
-        self.values = values_array
         
         try:
             # Create NeuralProphet model
             self.model = NeuralProphet(
-                n_lags=7,
+                n_lags=min(7, len(values_array) // 3),
                 n_forecasts=1,
                 yearly_seasonality=False,
-                weekly_seasonality=True if len(values_array) >= 14 else False
+                weekly_seasonality=len(values_array) >= 14
             )
             
             # Prepare data as DataFrame
@@ -72,36 +73,42 @@ class NeuralProphetModel:
                 'y': values_array
             })
             
-            # Fit model
-            self.model.fit(df, epochs=100, batch_size=8, verbose=0)
+            # Fit model with adaptive epochs
+            epochs = min(100, max(20, len(values_array) // 2))
+            self.model.fit(df, epochs=epochs, batch_size=8, verbose=0)
             
             self.metadata = {
                 "type": "NeuralProphet",
                 "architecture": "Neural Network with AR-Net",
                 "data_points_used": len(values_array),
                 "seasonality_enabled": len(values_array) >= 14,
+                "fitted": True,
+                "n_lags": min(7, len(values_array) // 3),
                 "message": "Neural network version of Prophet"
             }
         except Exception as e:
-            self._fit_fallback(dates, values)
+            # Fallback if NeuralProphet fitting fails
+            self._fit_fallback(values_array)
     
-    def forecast(self, horizon: int) -> Tuple[List[float], List[float], List[float]]:
+    def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate NeuralProphet forecast.
+        Generate NeuralProphet forecast with bounds validation.
         
         Args:
             horizon: Number of days to forecast
             
         Returns:
-            Tuple of (forecast, lower_bound, upper_bound)
+            Dictionary with forecast values and confidence intervals
         """
         if self.model is None or self.values is None:
-            return [np.nan] * horizon, [np.nan] * horizon, [np.nan] * horizon
+            raise ValueError("Model must be fitted before forecasting")
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
         
         try:
             import pandas as pd
             
-            # Create future dataframe
+            # Create historical dataframe
             df = pd.DataFrame({
                 'ds': pd.date_range(start='2024-01-01', periods=len(self.values)),
                 'y': self.values
@@ -110,55 +117,62 @@ class NeuralProphetModel:
             future = self.model.make_future_dataframe(df, periods=horizon)
             forecast = self.model.predict(future)
             
-            # Extract predictions
-            forecast_values = forecast['yhat'].tail(horizon).values.tolist()
+            # Extract predictions and apply non-negative constraint
+            forecast_values = [max(0, float(v)) for v in forecast['yhat'].tail(horizon).values.tolist()]
             
-            # Estimate confidence intervals
-            std = np.std(self.values)
-            lower_bounds = [v - 1.96 * std for v in forecast_values]
-            upper_bounds = [v + 1.96 * std for v in forecast_values]
+            # Calculate confidence intervals from residuals
+            residuals = self.values - forecast['yhat'].head(len(self.values)).values
+            std_error = np.std(residuals) if np.std(residuals) > 0 else np.mean(forecast_values) * 0.1
+            
+            lower_bounds = []
+            upper_bounds = []
+            
+            for i, fv in enumerate(forecast_values):
+                # Increase uncertainty with horizon
+                adjusted_std = std_error * np.sqrt(1 + i * 0.08)
+                lower = max(0, fv - 1.96 * adjusted_std)
+                upper = fv + 1.96 * adjusted_std
+                
+                # Ensure bounds are valid
+                lower = min(lower, fv)
+                upper = max(upper, fv)
+                
+                lower_bounds.append(lower)
+                upper_bounds.append(upper)
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
             
             return {
-                "forecast": forecast_values,
-                "lower": lower_bounds,
-                "upper": upper_bounds,
-                "model_name": "neural_prophet",
-                "trend": "stable",
-                "seasonality": "none"
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
+                "confidence_level": 0.95,
+                "method": "NeuralProphet"
             }
-        except Exception:
-            return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "neural_prophet",
-                "trend": "stable",
-                "seasonality": "none"
-            }
+        except Exception as e:
+            raise ValueError(f"NeuralProphet forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""
         return self.metadata
     
-    def _fit_fallback(self, dates: List[str], values: List[float]) -> None:
+    def _fit_fallback(self, values_array: np.ndarray) -> None:
         """Fallback implementation if NeuralProphet unavailable."""
-        values_array = np.array(values, dtype=float)
-        
         if len(values_array) < 5:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 5 data points"
-            }
-            return
+            raise ValueError("Need at least 5 data points")
         
         self.values = values_array
         
         # Simple fallback: store values for naive forecast
         self.metadata = {
             "type": "NeuralProphet (Fallback)",
-            "message": "NeuralProphet not installed, using fallback",
+            "message": "NeuralProphet not installed or failed, using fallback",
             "data_points_used": len(values_array),
-            "status": "fallback_mode"
+            "fitted": True,
+            "fallback_mode": True
         }
     
     def _forecast_fallback(self, horizon: int) -> Tuple[List[float], List[float], List[float]]:

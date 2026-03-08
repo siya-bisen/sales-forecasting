@@ -37,21 +37,22 @@ class PolynomialRegressionModel:
     
     def fit(self, dates: List[str], values: List[float]) -> None:
         """
-        Fit polynomial regression model.
+        Fit polynomial regression model with validation.
         
         Args:
             dates: List of date strings
             values: List of sales values
         """
-        values_array = np.array(values, dtype=float)
+        # Validate input
+        if not values or len(values) < 3:
+            raise ValueError(f"Need at least 3 data points (have {len(values) if values else 0})")
         
-        if len(values_array) < 3:
-            self.metadata = {
-                "status": "insufficient_data",
-                "message": "Need at least 3 data points"
-            }
-            return
+        # Clean invalid values
+        values_clean = [v for v in values if isinstance(v, (int, float)) and np.isfinite(v)]
+        if len(values_clean) < 3:
+            raise ValueError("Not enough valid data points for polynomial fitting")
         
+        values_array = np.array(values_clean, dtype=float)
         self.values = values_array
         
         # Auto-detect optimal degree if not provided
@@ -62,7 +63,7 @@ class PolynomialRegressionModel:
         
         # Create features
         X = np.arange(len(values_array)).reshape(-1, 1)
-        self.poly_features = PolynomialFeatures(degree=self.degree)
+        self.poly_features = PolynomialFeatures(degree=self.degree, include_bias=False)
         X_poly = self.poly_features.fit_transform(X)
         
         # Fit model
@@ -81,13 +82,16 @@ class PolynomialRegressionModel:
             "r_squared": round(r_squared, 4),
             "trend_direction": trend_direction,
             "data_points_used": len(values_array),
-            "interpretation": f"Degree-{self.degree} polynomial trend",
-            "message": "Simple polynomial trend fitting"
+            "fitted": True,
+            "interpretation": f"Degree-{self.degree} polynomial fit",
+            "message": "Polynomial trend fitting model"
         }
+        
+        self.fitted = True
     
     def forecast(self, horizon: int) -> Dict[str, Any]:
         """
-        Generate polynomial regression forecast.
+        Generate polynomial regression forecast with confidence intervals.
         
         Args:
             horizon: Number of days to forecast
@@ -95,44 +99,63 @@ class PolynomialRegressionModel:
         Returns:
             Dictionary with forecast data and metadata
         """
-        if self.model is None or self.values is None:
+        if not self.fitted or self.model is None or self.values is None:
+            raise ValueError("Model must be fitted before forecasting")
+        
+        if horizon < 1:
+            raise ValueError("Horizon must be at least 1")
+        
+        try:
+            forecast_values = []
+            n = len(self.values)
+            
+            # Generate predictions for future periods
+            for i in range(horizon):
+                X_future = np.array([[n + i]])
+                X_poly = self.poly_features.transform(X_future)
+                pred = float(self.model.predict(X_poly)[0])
+                forecast_values.append(max(0, pred))
+            
+            # Calculate residuals for uncertainty
+            X_train = np.arange(n).reshape(-1, 1)
+            X_train_poly = self.poly_features.transform(X_train)
+            residuals = self.values - self.model.predict(X_train_poly)
+            residual_std = np.std(residuals) if np.std(residuals) > 0 else np.mean(forecast_values) * 0.1
+            if residual_std == 0:
+                residual_std = np.mean(forecast_values) * 0.1 if np.mean(forecast_values) > 0 else 1
+            
+            # Confidence intervals with horizon-based expansion
+            lower_bounds = []
+            upper_bounds = []
+            
+            for i, fv in enumerate(forecast_values):
+                # Increase uncertainty with horizon
+                adjusted_std = residual_std * np.sqrt(1 + i * 0.08)
+                lower = max(0, fv - 1.96 * adjusted_std)
+                upper = fv + 1.96 * adjusted_std
+                
+                # Ensure bounds are valid
+                lower = min(lower, fv)
+                upper = max(upper, fv)
+                
+                lower_bounds.append(lower)
+                upper_bounds.append(upper)
+            
+            # Detect trend direction
+            recent_trend = forecast_values[-1] - forecast_values[0] if horizon > 1 else forecast_values[0]
+            trend_direction = "upward" if recent_trend > 0 else ("downward" if recent_trend < 0 else "flat")
+            
             return {
-                "forecast": [np.nan] * horizon,
-                "lower": [np.nan] * horizon,
-                "upper": [np.nan] * horizon,
-                "model_name": "polynomial_regression",
-                "trend": "stable",
-                "seasonality": "none"
+                "forecast": [float(v) for v in forecast_values],
+                "lower_bounds": [float(v) for v in lower_bounds],
+                "upper_bounds": [float(v) for v in upper_bounds],
+                "trend": trend_direction,
+                "degree": self.degree,
+                "confidence_level": 0.95,
+                "method": "Polynomial Regression"
             }
-        
-        forecast_values = []
-        n = len(self.values)
-        
-        # Generate predictions for future periods
-        for i in range(horizon):
-            X_future = np.array([[n + i]])
-            X_poly = self.poly_features.transform(X_future)
-            pred = self.model.predict(X_poly)[0]
-            forecast_values.append(pred)
-        
-        # Calculate residuals for uncertainty
-        X_train = np.arange(n).reshape(-1, 1)
-        X_train_poly = self.poly_features.transform(X_train)
-        residuals = self.values - self.model.predict(X_train_poly)
-        residual_std = np.std(residuals)
-        
-        # Confidence intervals (±1.96 std dev for 95% CI)
-        lower_bounds = [v - 1.96 * residual_std for v in forecast_values]
-        upper_bounds = [v + 1.96 * residual_std for v in forecast_values]
-        
-        return {
-            "forecast": forecast_values,
-            "lower": lower_bounds,
-            "upper": upper_bounds,
-            "model_name": "polynomial_regression",
-            "trend": "stable",
-            "seasonality": "none"
-        }
+        except Exception as e:
+            raise ValueError(f"Polynomial regression forecast failed: {str(e)}")
     
     def get_metadata(self) -> Dict[str, Any]:
         """Get model metadata and analysis."""
